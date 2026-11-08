@@ -1,0 +1,21 @@
+# Text that public pull request titles, bodies and commit messages must not carry.
+# One POSIX ERE per entry; read by scripts/scan_refs.sh.
+---
+attribution:
+  - '[c]laude-session'
+  - '[c]laude\.ai'
+  - '^[[:space:]]*co-authored-by:[[:space:]]*[c]laude'
+  - 'generated with[[:space:]]*\[?[c]laude'
+ids:
+  - '(^|[^A-Za-z0-9_])D[0-9]{1,2}([^A-Za-z0-9_]|$)'
+  - '(^|[^A-Za-z0-9_])M[0-9](\.[0-9]|-[A-G])?([^A-Za-z0-9_]|$)'
+  - '[L]§|[S]§'
+  - '(^|[^A-Za-z0-9_])A#[0-9]+'
+words:
+  - '(^|[^A-Za-z])l[a]b([^A-Za-z]|$)'
+  - '[M]VP|[m]ilestone'
+  - '[s]uperpowers|[.]claude/'
+  - '[s]pec (section|rev)|[r]uling'
+  - '(^|[^A-Za-z])s[p]ikes?([^A-Za-z]|$)'
+  - '[a]pache[- ]licen[cs]e|[a]pache-2'
+  - '[c]ontribut|pull request[s]? welcome|code [o]f conduct'

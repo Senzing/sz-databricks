@@ -1,0 +1,23 @@
+name: Lint workflows
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  # `github.ref`, not `head_ref || ref_name`: those two put a branch named
+  # `1.0.0` and a tag named `1.0.0` into the same concurrency group, and this
+  # repository's tags are v<semver>. `github.ref` cannot collide.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  lint-workflows:
+    permissions:
+      contents: read
+      packages: read
+      pull-requests: write
+      statuses: write
+    uses: senzing-factory/build-resources/.github/workflows/lint-workflows.yaml@70dab644cea895c2091e059b2e904ba9866e11d6 # v4.5.1

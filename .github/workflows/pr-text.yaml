@@ -1,0 +1,56 @@
+name: Pull request text
+
+# Every pull request's title, body and commit messages are public for good
+# (a pull request's commits stay under refs/pull/<n>/head after a squash
+# merge), so they are held to scripts/pr_denylist.yaml: no session
+# attribution, no internal process identifiers or vocabulary. Edit the title
+# or body, or rewrite the commits, until this passes.
+#
+# No secrets and no code from the pull request: the scripts come from the
+# base commit, and the text is read from the event and the API.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, reopened, synchronize]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  pr-text:
+    name: pull request text
+    permissions:
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout the base commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Collect the title, body and commit messages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pr-text"
+          printf '%s\n' "$PR_TITLE" > "$RUNNER_TEMP/pr-text/title.txt"
+          printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr-text/body.txt"
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/commits" \
+            --jq '.[] | "commit " + .sha + "\n" + .commit.message + "\n"' > "$RUNNER_TEMP/pr-text/commits.txt"
+
+      - name: Scan it
+        run: |
+          set -euo pipefail
+          scripts/scan_refs.sh scripts/pr_denylist.yaml "$RUNNER_TEMP/pr-text"

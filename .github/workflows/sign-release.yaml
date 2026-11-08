@@ -1,0 +1,217 @@
+name: Sign release
+
+# Signs the files of a release as THIS workflow, so that customers verify one
+# identity that names only this repository:
+#
+#   https://github.com/Senzing/sz-databricks/.github/workflows/sign-release.yaml@refs/tags/v<release>
+#
+# THIS WORKFLOW AUTHENTICATES TO NOTHING OUTSIDE THIS REPOSITORY, and it builds
+# nothing. The release -- the App binary, the engine JAR, the payload archives,
+# the bundle tarball and SHA256SUMS -- is built elsewhere and PUSHED here, as a
+# release created by a single publishing account. This workflow reads that
+# release with its own GITHUB_TOKEN, checks it, signs each file keyless (cosign
+# sign-blob, the OIDC token of this run) and attaches <file>.sigstore.json for
+# each file, SHA256SUMS included. Keep it that way: no credential here may reach
+# anything else.
+#
+# THE TAG IS v<major>.<minor>.<patch>, or v<major>.<minor>.<patch>-rc.<n> for a
+# release candidate, which must be published as a prerelease (and a release
+# without the suffix must not be).
+#
+# THERE IS DELIBERATELY NO workflow_dispatch: a manual run that SIGNED something
+# would sign without a release and route around the checks below.
+
+on:
+  release:
+    types:
+      - published
+
+concurrency:
+  # `github.ref` is `refs/tags/<tag>`; two releases published on the same tag
+  # wait for one another, and a signing run is never cancelled.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  OIDC_ISSUER: https://token.actions.githubusercontent.com
+
+jobs:
+  sign:
+    name: sign the release files
+    permissions:
+      # Attaches the signatures to the release this workflow was triggered by.
+      contents: write
+      # The keyless signing identity.
+      id-token: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      # The default branch's HEAD at the time of this run: the scripts below come
+      # from it, and the release must target it (next step).
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      # `github.event.release.tag_name` becomes part of the signing identity, so it
+      # is checked before anything is downloaded.
+      #
+      # WHO PUBLISHED IT. A release signed here must have been authored by the
+      # account whose fine-grained token the build publishes with, whose login is
+      # the repository variable PAYLOAD_PUBLISHER_LOGIN. Fail closed: with the
+      # variable unset nothing is signed.
+      #
+      # WHAT IT POINTS AT. The tag must name the commit main is at now: the
+      # publisher creates the tag on main's HEAD, which it has checked holds
+      # exactly the files of this release's source. A tag on any other commit is
+      # refused, whoever made it.
+      - name: Validate the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+          AUTHOR: ${{ github.event.release.author.login }}
+          EXPECTED_AUTHOR: ${{ vars.PAYLOAD_PUBLISHER_LOGIN }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$ ]]; then
+            echo "::error::Release tag '${TAG}' is not v<major>.<minor>.<patch>[-rc.<n>] (no leading zeros)."
+            exit 1
+          fi
+          want_prerelease=false
+          if [[ "$TAG" == *-* ]]; then want_prerelease=true; fi
+          if [ "$PRERELEASE" != "$want_prerelease" ]; then
+            echo "::error::Release ${TAG} has prerelease=${PRERELEASE}; a release candidate (-rc.<n>) must be a prerelease and a release must not be."
+            exit 1
+          fi
+          if [ -z "$EXPECTED_AUTHOR" ]; then
+            echo "::error::The repository variable PAYLOAD_PUBLISHER_LOGIN is not set, so the author of release ${TAG} cannot be checked."
+            exit 1
+          fi
+          if [ "$AUTHOR" != "$EXPECTED_AUTHOR" ]; then
+            echo "::error::Release ${TAG} was published by '${AUTHOR}', not by the payload publisher '${EXPECTED_AUTHOR}'. Refusing to sign it."
+            exit 1
+          fi
+          target="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TAG}" --jq .sha)"
+          head="$(git rev-parse HEAD)"
+          if [ "$target" != "$head" ]; then
+            echo "::error::Release ${TAG} targets ${target}, not main's HEAD ${head}. Refusing to sign it."
+            exit 1
+          fi
+          echo "[INFO] release ${TAG} (prerelease=${PRERELEASE}) on main ${head}, published by ${AUTHOR}"
+
+      # `release: published` FIRES ON THE RELEASE, NOT ON ITS ASSETS. The publisher
+      # creates the release with its files in one call; this wait is the backstop
+      # for a release cut the other way round. An asset's `state` is `open` while
+      # it is uploading and `uploaded` once complete.
+      #
+      # A SIGNED VERSION IS NEVER RE-SIGNED. SHA256SUMS.sigstore.json is attached
+      # last, so its presence means a signing run finished; a second one would put
+      # a signature on whatever the release holds now. A run that failed before
+      # that file left partial *.sigstore.json files, which the exact-set check
+      # refuses: delete them from the release, then re-run.
+      - name: Download the release files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          attempt=1
+          max_attempts=40
+          mkdir -p assets
+          while true; do
+            names="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+              --jq '.assets[] | select(.state == "uploaded") | .name')"
+            if printf '%s\n' "$names" | grep -qx 'SHA256SUMS.sigstore.json'; then
+              echo "::error::Release ${TAG} already carries SHA256SUMS.sigstore.json: a signed version is never re-signed. Cut the next version instead."
+              exit 1
+            fi
+            if printf '%s\n' "$names" | grep -qx 'SHA256SUMS'; then
+              rm -rf assets/SHA256SUMS
+              gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --dir assets
+              complete=true
+              while read -r _ listed; do
+                printf '%s\n' "$names" | grep -qxF "$listed" || complete=false
+              done < assets/SHA256SUMS
+              [ "$complete" = true ] && break
+            fi
+            if [ "$attempt" -ge "$max_attempts" ]; then
+              echo "::error::Release ${TAG} does not hold SHA256SUMS and every file it lists, uploaded."
+              exit 1
+            fi
+            echo "[INFO] waiting for the release files (attempt ${attempt}/${max_attempts})"
+            attempt=$((attempt + 1))
+            sleep 15
+          done
+          rm -rf assets
+          mkdir -p assets
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir assets
+          ls -l assets
+
+      # THE CHECKSUMS ARE INTEGRITY, NOT AUTHENTICITY. They travel with the files
+      # on the same release. What stands between a swapped file and a signature is
+      # who may create the release (the author check), what it targets (main's
+      # HEAD), and that a signed version is never re-signed. The set is exact:
+      # every file found here is signed, so an extra one is refused, and the
+      # engine JAR's payload digests must match the payload archives.
+      - name: The release files are the contracted set and match SHA256SUMS
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          RELEASE_REPO="$GITHUB_REPOSITORY" scripts/check_release_assets.sh assets "${TAG#v}"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # Every file and SHA256SUMS itself, keyless, as this workflow at this tag.
+      # Each signature is verified straight away against the exact identity
+      # customers use; SHA256SUMS goes last, so its signature marks a finished run.
+      - name: Sign every file (cosign sign-blob)
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        working-directory: assets
+        run: |
+          set -euo pipefail
+          mkdir -p ../bundles
+          for asset in $(awk '{ print $2 }' SHA256SUMS) SHA256SUMS; do
+            cosign sign-blob --yes --bundle "../bundles/${asset}.sigstore.json" "$asset"
+            cosign verify-blob --bundle "../bundles/${asset}.sigstore.json" \
+              --certificate-oidc-issuer "$OIDC_ISSUER" \
+              --certificate-identity "https://github.com/${WORKFLOW_REF}" \
+              "$asset" > /dev/null
+          done
+          ls -l ../bundles
+
+      - name: Attach the signatures to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          identity="https://github.com/${WORKFLOW_REF}"
+          {
+            echo
+            echo "## Verify"
+            echo "Every file is signed as \`${identity}\`; see README.md."
+            echo '```bash'
+            echo "sha256sum -c SHA256SUMS"
+            echo "cosign verify-blob --bundle <file>.sigstore.json --certificate-identity '${identity}' \\"
+            echo "  --certificate-oidc-issuer ${OIDC_ISSUER} <file>"
+            echo '```'
+          } > notes.md
+          body="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)"
+          printf '%s\n%s\n' "$body" "$(cat notes.md)" > full.md
+          # SHA256SUMS.sigstore.json last: it marks a finished run.
+          for f in bundles/*.sigstore.json; do
+            [ "$f" = bundles/SHA256SUMS.sigstore.json ] && continue
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "$f"
+          done
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber bundles/SHA256SUMS.sigstore.json
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file full.md
+          cat notes.md >> "$GITHUB_STEP_SUMMARY"

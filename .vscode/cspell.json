@@ -1,0 +1,26 @@
+{
+  "version": "0.2",
+  "language": "en",
+  "words": [
+    "archs",
+    "CREATEDB",
+    "CREATEROLE",
+    "dbfs",
+    "hitlist",
+    "Lakebase",
+    "licence",
+    "PGSSLMODE",
+    "PGSSLROOTCERT",
+    "pipefail",
+    "Senzing",
+    "sigstore",
+    "sslmode",
+    "sslrootcert",
+    "TBLPROPERTIES",
+    "transactionid"
+  ],
+  "ignorePaths": [
+    ".git/**",
+    "scripts/pr_denylist.yaml"
+  ]
+}

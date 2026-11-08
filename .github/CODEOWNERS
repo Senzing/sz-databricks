@@ -1,0 +1,6 @@
+# Default code owner
+#
+# Branch protection on main requires code-owner review. That requirement is
+# inert without this file, so every path needs an owner with write access.
+
+* @Senzing/senzing-rust-developers

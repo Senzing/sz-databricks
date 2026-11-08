@@ -1,0 +1,23 @@
+name: add to project senzing github organization
+
+on:
+  issues:
+    types:
+      - opened
+      - reopened
+
+permissions: {}
+
+jobs:
+  add-to-project:
+    permissions:
+      repository-projects: write
+    secrets:
+      APP_CLIENT_ID: ${{ secrets.SENZING_GITHUB_PROJECT_APP_CLIENT_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.SENZING_GITHUB_PROJECT_APP_PRIVATE_KEY }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
+    uses: senzing-factory/build-resources/.github/workflows/add-to-project.yaml@70dab644cea895c2091e059b2e904ba9866e11d6 # v4.5.1
+    with:
+      project-number: ${{ vars.SENZING_GITHUB_ORGANIZATION_PROJECT }}
+      org: ${{ vars.SENZING_GITHUB_ACCOUNT_NAME }}

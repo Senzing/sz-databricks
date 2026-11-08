@@ -1,0 +1,7 @@
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # Every action and reusable workflow MUST be pinned to a full commit SHA (immutable),
+        # first-party ones included.
+        "*": hash-pin

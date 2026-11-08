@@ -1,0 +1,20 @@
+name: Spellcheck
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  # `github.ref`, not `head_ref || ref_name`: those two put a branch named
+  # `1.0.0` and a tag named `1.0.0` into the same concurrency group, and this
+  # repository's tags are v<semver>. `github.ref` cannot collide.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  spellcheck:
+    permissions:
+      contents: read
+    uses: senzing-factory/build-resources/.github/workflows/cspell.yaml@70dab644cea895c2091e059b2e904ba9866e11d6 # v4.5.1
