@@ -91,7 +91,7 @@ carries Senzing SDK 4.4.3; the Setup page shows the release and the Senzing SDK 
 | Rule | |
 |---|---|
 | Everything runs in your workspace | the App, the job clusters, Lakebase, your data, logs and status |
-| Senzing, Inc. hosts nothing and receives nothing | it publishes software only: the release files. Two optional steps that you start send something to Senzing, Inc.: the Senzing MCP server receives what you or your assistant send it (column names and synthetic rows when mapping, never your records), and Ask Senzing receives the details you give it when you request an evaluation license |
+| Senzing, Inc. hosts nothing and receives nothing | it publishes software only: the release files. Two optional steps that you start send something to Senzing, Inc.: the Senzing MCP server receives what you or your assistant send it (column names and the mapping when mapping: the mapper runs on your machine, over a sample you export there, and never sends your records), and Ask Senzing receives the details you give it when you request an evaluation license |
 | One download | the setup job fetches its release's payload from this repository's GitHub release; with a Volume as the payload source it needs no egress at all |
 | The payload is pinned | setup refuses any payload archive whose SHA-256 differs from the digests compiled into the release's engine JAR, so verifying the bundle verifies the payload |
 | Your secrets stay in your secret scope | the license and the engine's database password live in the bundle's secret scope (`sz_databricks`): the jobs' principal reads it, only the App's group writes it |

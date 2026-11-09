@@ -317,12 +317,13 @@ works in a new assistant session: it needs only `<dir>/sql.sh` from Prompt 1. Fi
 > 1. **Ask me about the tables.** Ask me for: the parent table (one row per person or
 >    organization) and its key column; each child table (addresses, phones and the like) and the
 >    column that holds the parent's key. Wait for my answers.
-> 2. **Map the tables without sending my records.** Read the column names and types with
->    `sql "DESCRIBE TABLE <catalog>.<schema>.<table>"` for each table. Ask me before you send
->    anything to the Senzing MCP server, then send it only the column names and types and a few
->    synthetic rows you make up to match them. This overrides the MCP server's own instruction to
->    export a sample of each table to CSV: never export, select or send a real row. Map with its
->    `mapping_workflow` tool (never hand-write the mapping). Then write the mapping view
+> 2. **Map the tables.** Ask me first, then export a sample of each related table to a CSV file on
+>    this machine (never paste rows into the chat): the header is the column names from
+>    `sql "DESCRIBE TABLE <catalog>.<schema>.<table>"`, the rows come from
+>    `sql "SELECT * FROM <catalog>.<schema>.<table> LIMIT <n>" | jq -r '@csv'` with the `<n>` I
+>    give you. Run ONE Senzing MCP `mapping_workflow` over those files together (never hand-write
+>    the mapping): its profiler and mapper run here, and the server receives the file names, column
+>    names and mapping, never the rows. Then write the mapping view
 >    `<catalog>.<schema>.<CODE>_mapped`, shaped like "Example: a parent table and a child table" on
 >    the use page, with exactly three columns as "Write a mapping view" there says: `DATA_SOURCE`
 >    (the constant `'<CODE>'`), `RECORD_ID` (`trim(BOTH ' \t\r\n' FROM <parent key>)`) and
