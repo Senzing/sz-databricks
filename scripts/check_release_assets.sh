@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # check_release_assets.sh <dir> <release>: fail unless <dir> holds exactly the files of release <release>
-# (the tag without its v), as release-assets.yaml names them. The private build runs it before it publishes;
-# the public signing workflow runs the same script (copied there by scripts/sync_public.sh) before it signs,
-# because it signs every file it finds. Checks:
+# (the tag, <senzing_version>-<build>), as release-assets.yaml names them. The private build runs it
+# before it publishes; the public signing workflow runs the same script (copied there by
+# scripts/sync_public.sh) before it signs, because it signs every file it finds. Checks:
 #   - the exact file set: the App binary, the engine JAR, one native archive per arch, the shared archive,
 #     the bundle tarball and SHA256SUMS; none empty or a link
 #   - SHA256SUMS lists exactly the others and verifies
@@ -21,8 +21,7 @@ if [ -z "$manifest" ]; then
 fi
 [ -f "$manifest" ] || { echo "check_release_assets.sh: no release-assets.yaml" >&2; exit 2; }
 [ -d "$dir" ] || { echo "check_release_assets.sh: $dir is not a directory" >&2; exit 1; }
-[[ "$release" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$ ]] \
-  || { echo "check_release_assets.sh: '$release' is not <major>.<minor>.<patch>[-rc.<n>]" >&2; exit 1; }
+[[ "$release" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[1-9][0-9]*$ ]] || { echo "check_release_assets.sh: '$release' is not <senzing_version>-<build>" >&2; exit 1; }
 ra() { local v; v="$("$here/build_yaml.sh" "$1" "$manifest")"; v="${v//\{release\}/$release}"; printf '%s\n' "${v//\{arch\}/${2:-}}"; }
 if command -v sha256sum >/dev/null; then sum=(sha256sum); else sum=(shasum -a 256); fi
 digest() { "${sum[@]}" | awk '{ print $1 }'; }

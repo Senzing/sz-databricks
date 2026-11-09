@@ -24,8 +24,8 @@ Have ready:
 |---|---|
 | The [prerequisites](../README.md#prerequisites) | a workspace admin with MANAGE on the catalog, Databricks CLI 1.23.0 or later with a profile for the workspace, `jq`, `cosign`, a bash or zsh shell |
 | The GitHub CLI (optional) | `gh`, logged in (`gh auth status`), to download the release; without it you download the files yourself |
-| A release | its number, the tag without its `v`, for example `0.1.0-rc.1`, from this repository's [releases](https://github.com/Senzing/sz-databricks/releases) |
-| A directory | an absolute path to a new empty directory for the release files, for example `/home/me/sz-databricks-0.1.0-rc.1` |
+| A release | its tag, for example `4.4.3-1`, from this repository's [releases](https://github.com/Senzing/sz-databricks/releases) |
+| A directory | an absolute path to a new empty directory for the release files, for example `/home/me/sz-databricks-4.4.3-1` |
 | A catalog | the Unity Catalog catalog to install into |
 | A group (optional) | the group that will query the results |
 | A license | base64; you paste it into the App yourself. No license yet? Open Ask Senzing, the assistant on [docs.senzing.com](https://docs.senzing.com), and ask it for a free evaluation license |
@@ -46,7 +46,7 @@ The prompts cite these pages by URL, since the release does not contain them:
 
 Fill in the placeholders and paste:
 
-> Install sz-databricks release `<release>` (the tag without its `v`, for example `0.1.0-rc.1`) into
+> Install sz-databricks release `<release>` (the release tag, for example `4.4.3-1`) into
 > my Databricks workspace, using my Databricks CLI profile `<profile>`, catalog `<catalog>` and the
 > new empty directory `<dir>` (an absolute path).
 >
@@ -78,12 +78,12 @@ Fill in the placeholders and paste:
 > 1. **Check the tools and my rights.** Run `databricks --version`, `jq --version`, `cosign version`
 >    and `databricks current-user me -o json | jq -r '.userName, (.groups[]?.display)'`. If the CLI
 >    is older than 1.23.0, the version the bundle is validated with, stop and tell me. Ask me to
->    confirm the workspace runs on AWS (the bundle's default node type, `r6g.large`, is an AWS
+>    confirm the workspace runs on AWS (the bundle's default node type, `r6g.xlarge`, is an AWS
 >    type); if it does not, stop. If the groups do not include `admins`, stop: the install needs a
 >    workspace admin. Ask me to confirm that I have MANAGE on `<catalog>` (or own it), and wait for
 >    my answer. If any command fails, stop and show me the error.
 > 2. **Download.** Create `<dir>` and download every file of the release into it:
->    `gh release download v<release> --repo Senzing/sz-databricks --dir <dir>`. If `gh` is missing
+>    `gh release download <release> --repo Senzing/sz-databricks --dir <dir>`. If `gh` is missing
 >    or `gh auth status` fails, ask me to download every file of the release from
 >    https://github.com/Senzing/sz-databricks/releases into `<dir>` and wait until I say it is done.
 >    Verify: `<dir>` holds `SHA256SUMS`, `SHA256SUMS.sigstore.json` and one `.sigstore.json` per
@@ -96,7 +96,7 @@ Fill in the placeholders and paste:
 >      cd <dir> || exit 1
 >      for f in $(awk '{print $2}' SHA256SUMS) SHA256SUMS; do
 >        cosign verify-blob --bundle "$f.sigstore.json" \
->          --certificate-identity "https://github.com/Senzing/sz-databricks/.github/workflows/sign-release.yaml@refs/tags/v<release>" \
+>          --certificate-identity "https://github.com/Senzing/sz-databricks/.github/workflows/sign-release.yaml@refs/tags/<release>" \
 >          --certificate-oidc-issuer https://token.actions.githubusercontent.com "$f" \
 >          || { echo "FAIL $f"; exit 1; }
 >      done
@@ -221,9 +221,16 @@ Fill in the placeholders and paste:
 >    of the troubleshooting page and tell me the fix.
 > 10. **Check it yourself.** Run `source <dir>/sql.sh && sql "SHOW TABLES IN <catalog>.senzing"`: it
 >     must list `entity`, `entity_record` and `relationship`. If it fails, show me the error. Tell me
->     in one line that the install is done, and in one more that the App bills while it runs and
+>     in one line that the install is done, in one more that the App bills while it runs, stops
+>     itself after 30 idle minutes and starts again from the workspace's **Apps** page, and that
 >     https://raw.githubusercontent.com/Senzing/sz-databricks/main/docs/use.md (section "Uninstall")
 >     removes everything when I am done.
+> 11. **Budget alerts.** Tell me to set two budgets with email alerts before loading data, and give me
+>     both links: a Databricks budget, set by an account admin, for the DBU spend
+>     (https://docs.databricks.com/aws/en/admin/account-settings/budgets), and an AWS budget for the
+>     job clusters' EC2 instances and EBS volumes
+>     (https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html). Do
+>     not create them yourself: they need account-level access and alert addresses only I can choose.
 >
 > Every step can be run again.
 

@@ -12,7 +12,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Senzing%20EULA-F57826?style=flat-square&labelColor=0F0D0C" alt="License: Senzing EULA"></a>
   <a href="https://github.com/Senzing/sz-databricks/releases"><img src="https://img.shields.io/badge/releases-GitHub-F57826?style=flat-square&labelColor=0F0D0C" alt="Releases"></a>
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/status-release%20candidate-F57826?style=flat-square&labelColor=0F0D0C" alt="Status: release candidate"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/status-public%20preview-F57826?style=flat-square&labelColor=0F0D0C" alt="Status: Public Preview"></a>
 </p>
 
 <img src="assets/ember-rule.svg" alt="" width="100%" height="4">
@@ -28,10 +28,10 @@
 > **Start here: [install and query with an AI assistant](docs/ai-assisted.md)**
 
 > [!IMPORTANT]
-> **Release candidate.** This release is published as a prerelease. Some steps have not yet been
-> run end to end on every workspace configuration: if anything differs from what these pages
-> describe, open an issue in this repository. Use is governed by the
-> [Senzing End User License Agreement](https://senzing.com/end-user-license-agreement/).
+> **Public Preview.** sz-databricks is provided as-is, without warranty of any kind and without a
+> support commitment. Some steps have not yet been run end to end on every workspace configuration:
+> if anything differs from what these pages describe, open an issue in this repository. Use is
+> governed by the [Senzing End User License Agreement](https://senzing.com/end-user-license-agreement/).
 
 Entity resolution works out which of your records describe the same person or organization, across
 and within your sources, and how those entities relate. Senzing entity resolution for Unity Catalog, installed by you as one Databricks Asset Bundle. A
@@ -54,7 +54,9 @@ flowchart LR
   T["Your tables<br/>(Change Data Feed)"] --> I
   F["Your files<br/>(a Volume folder)"] --> I
   A["Databricks App<br/>Setup, Sources, Files,<br/>Grants, Status"] -- starts and pauses --> I["Ingest job<br/>classic job cluster"]
+  W["Watcher job<br/>serverless, every 5 minutes"] -- starts on changes --> I
   A -- runs --> S["Setup job"]
+  W -- upgrades --> S
   S --> L
   I <--> L[("Lakebase<br/>Senzing repository")]
   I --> M["Entity mart<br/>entity, entity_record, relationship"]
@@ -62,14 +64,17 @@ flowchart LR
 
 | Part | Runs as | Does |
 |---|---|---|
-| The App (`sz-databricks`) | Databricks App, its own service principal | setup, the EULA and license, source registration, starting, pausing and monitoring the jobs |
+| The App (`sz-databricks`) | Databricks App, its own service principal | setup, the EULA and license, source registration, starting, pausing and monitoring the jobs; stops itself after 30 idle minutes |
+| `sz-databricks-watch` | job, serverless, every 5 minutes | starts the ingest job when a source changed, finishes a pause, upgrades after you deploy a new release and stops an idle App: all of it with the App stopped |
 | `sz-databricks-setup` | job, single-node cluster | stages the engine payload into your Volume, creates the Senzing database and role in Lakebase and the App's tables |
 | `sz-databricks-ingest` | job, autoscaling cluster | reads each source's new changes, resolves them, processes redo (follow-up work the engine queues when a change to one entity means related entities must be re-evaluated) and keeps the entity mart current; stops after 10 idle minutes |
 | Lakebase project | Lakebase Autoscaling, PostgreSQL 17 | the Senzing repository; scales to zero when idle |
+| `sz-databricks status` | AI/BI dashboard, on the App's SQL warehouse, read with each viewer's own access | ingest runs, engine health, quarantined records, each source's position and the entity mart's counts, with the App stopped |
 | Two schemas and a Volume | Unity Catalog | `senzing` holds the entity mart; `senzing_internal` holds the App's registry and status and the Volume `files` |
 
 The bundle creates all of it, plus a SQL warehouse for the App, a secret scope and a cluster policy
-for the jobs. Nothing runs between ingest runs except the App.
+for the jobs. Between ingest runs only the watcher's short scheduled runs bill, and the App while you
+use it.
 
 ## What a release contains
 
@@ -82,9 +87,10 @@ for the jobs. Nothing runs between ingest runs except the App.
 | `sz-databricks-app-<release>-x86_64-linux-musl` | the App binary (also inside the bundle) |
 | `SHA256SUMS`, `*.sigstore.json` | checksums, and a keyless cosign signature for every file above and for `SHA256SUMS` |
 
-A release is tagged `v<release>`, for example `v0.1.0-rc.1`; `<release>` is the tag without its
-`v`. A release candidate (`-rc.<n>`) is published as a prerelease. The first release candidate
-carries Senzing SDK 4.4.3; the Setup page shows the release and the Senzing SDK version it runs.
+A release is named `<senzing_version>-<build>`, for example `4.4.3-1`: the Senzing SDK version it
+carries and a build counter that restarts at 1 for each SDK version, so `4.4.3-10` is a later build
+than `4.4.3-7`. The tag is the release. The Setup page shows the release and the Senzing SDK version
+it runs.
 
 ## Trust model
 
@@ -112,12 +118,14 @@ carries Senzing SDK 4.4.3; the Setup page shows the release and the Senzing SDK 
 
 ## Sizing
 
-By default the ingest job runs on one or two `r6g.large` workers (Graviton, 2 cores, 16 GB) with 12
-engine threads each, and the setup job on a single node of the same type. Job clusters exist only
+By default the ingest job runs on one or two `r6g.xlarge` workers (Graviton, 4 cores, 32 GB) with 18
+engine threads each, and the setup job on a single node of the same type. Each engine thread gets 1 GB
+of the node's memory; the install checks that the threads you set fit the node type you choose. Job clusters exist only
 while a run lasts: a run ends after 10 minutes with nothing new to do, and the cluster stops with
 it. The Lakebase endpoint runs at 4 compute units (about 8 GB; Databricks documents about 2 GB per
 compute unit), sized as 2 vCPU, and scales to zero after 30 idle minutes; the App's SQL warehouse is a 2X-Small serverless warehouse that stops after 5 idle
-minutes. The engine's concurrency is bounded by that Lakebase size (2 vCPU gives 24 engine threads) and
+minutes; the App runs on Medium compute (`app_compute_size`) and stops itself after 30 idle minutes.
+The watcher job runs on serverless compute every 5 minutes. The engine's concurrency is bounded by that Lakebase size (2 vCPU gives 24 engine threads) and
 by the cluster size; you need enter nothing. Every size is a bundle variable you pass at install: see
 [Sizing](docs/use.md#sizing).
 
@@ -128,11 +136,18 @@ parts:
 
 | Resource | When it bills |
 |---|---|
-| The App's compute | always, while the App runs: it is the one part that runs between ingest runs |
+| The App's compute | while the App runs. It stops itself after 30 minutes without a page view or action unless **Keep running** on **Status** is on; **Status** shows its DBUs per hour. Start it again from the workspace's **Apps** page |
+| The watcher job (serverless) | each scheduled run, every 5 minutes by default (`--var watch_cron=`) |
 | The job clusters (setup and ingest) | only during a run: an ingest run ends after 10 idle minutes and its cluster stops |
 | The SQL warehouse (2X-Small, serverless) | while it answers the App's queries; it stops after 5 idle minutes |
 | Lakebase | compute while awake (4 compute units, about 8 GB, by default; it scales to zero after 30 idle minutes), and the storage of the Senzing repository |
 | The Volume | the staged engine payload, about 1.3 GB per release; earlier releases' payloads stay until you delete them ([upgrade](docs/use.md#upgrade)) |
+
+Set budget alerts before you load data: a
+[Databricks budget](https://docs.databricks.com/aws/en/admin/account-settings/budgets) (an account admin
+sets it; it emails when the DBU spend reaches its limit) and an
+[AWS budget](https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html) for the
+job clusters' EC2 instances and EBS volumes, which AWS bills. A budget alerts and never stops anything.
 
 Remove everything with [Uninstall](docs/use.md#uninstall).
 
@@ -162,14 +177,14 @@ loads one data source as a files source, with no mapping view.
 ## Verify
 
 Every release file is signed keyless with Sigstore by this repository's `sign-release.yaml`
-workflow on the tag `v<release>`, and `SHA256SUMS` lists them all. The identity is exact, so a file
+workflow on the tag `<release>`, and `SHA256SUMS` lists them all. The identity is exact, so a file
 signed for another tag does not pass. In the directory that holds the release files:
 
 ```sh
-release=<release>   # the tag without its v
+release=<release>   # the release tag, for example 4.4.3-1
 for f in $(awk '{print $2}' SHA256SUMS) SHA256SUMS; do
   cosign verify-blob --bundle "$f.sigstore.json" \
-    --certificate-identity "https://github.com/Senzing/sz-databricks/.github/workflows/sign-release.yaml@refs/tags/v$release" \
+    --certificate-identity "https://github.com/Senzing/sz-databricks/.github/workflows/sign-release.yaml@refs/tags/$release" \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com "$f"
 done
 sha256sum -c SHA256SUMS   # macOS: shasum -a 256 -c SHA256SUMS

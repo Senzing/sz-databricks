@@ -15,7 +15,8 @@ These pages assume SENZING® entity resolution installed with the default names 
 | the install | the install script's output: each step is printed before it runs, and a failed step prints the command that resumes there |
 | a setup run | **Setup** (status and error), then the `sz-databricks-setup` job's runs and their driver log |
 | an ingest run | **Status** (recent runs), then the `sz-databricks-ingest` job's runs and their driver log: `MART_REFRESH` lines show where a mart refresh spends its time (`read_ms`, `get_ms`, `merge_ms`, `delete_ms`) |
-| the App itself (its page does not load or shows an error) | the App page's **Logs** tab, or `databricks apps logs sz-databricks` |
+| the App itself (its page does not load or shows an error) | the App page's **Logs** tab, or `databricks apps logs sz-databricks`. A stopped App (it stops itself after 30 idle minutes) answers nothing: click **Start** on it in the workspace's **Apps** page |
+| the watcher (a change starts no run, a pause or upgrade does not finish) | **Status** (the watcher's last run and its error), then the `sz-databricks-watch` job's runs and their driver log |
 | a source | **Sources** (its state, error and a hint), then **Grants** |
 | a file of a files source | **Files** (FAILED with why), and `<catalog>.senzing_internal._file_events` |
 | records the engine rejected | `<catalog>.senzing_internal._ingest_quarantine`, with each record's error |
@@ -31,8 +32,11 @@ These pages assume SENZING® entity resolution installed with the default names 
 | `verify-release.sh` prints `FAIL <file>: …` with a cosign reason, or `sha256sum` reports `FAILED` | The file is not the one this release signed (another release's, or damaged): download it again from the same release, and pass that release (the tag without its `v`). Install nothing from it until every file passes. |
 | `verify-release.sh: cosign is not installed` | Install [cosign](https://docs.sigstore.dev), then run the install again. |
 | `install.sh: release directory <dir> not found` | `--release-dir` must name the directory that holds the downloaded release files. |
-| `install.sh: no job_run_as: pass --var job_run_as=<application-id> when resuming after pre` | You resumed after step 2: add `--var job_run_as=<application-id>`, the id step 2 printed as `job_run_as=…`. |
-| Deploy fails: "must have 'servicePrincipal.user' role on the service principal" | The deploying user lacks the **Service principal: User** role on the jobs' principal. Step 2 gives it to the user running the install; when someone else deploys, run step 2 with `DEPLOYER=<user>`. |
+| `node-sizing.sh: worker_task_slots <n> is above the <m> engine threads one <node type> worker holds: …` | One worker of that node type cannot give each engine thread 1 GB beside the heap, the engine and the Databricks reserve; the message shows the numbers. Pass `--var worker_task_slots=<m>` or less, a smaller `executor_memory`, or a `node_type_id` with more memory, then resume with the command it prints ([Sizing](use.md#sizing)). |
+| `node-sizing.sh: node type <node type> is not in this workspace's node types` | `node_type_id` names a type this workspace does not offer: pick one from `databricks clusters list-node-types`. |
+| `databricks bundle run sz_app` by hand fails: "app crashed unexpectedly", the App's log names a missing variable | The App was stopped, so the run first restarted its last deployment: the new release's code with the earlier release's settings. Run `databricks bundle run sz_app -t prod` again: the App is now running, so it deploys the new settings. The install script's step 8 does this itself. |
+| `install.sh: no job_run_as: pass --var job_run_as=<application-id> when resuming after pre` | You resumed after step 3: add `--var job_run_as=<application-id>`, the id step 3 printed as `job_run_as=…`. |
+| Deploy fails: "must have 'servicePrincipal.user' role on the service principal" | The deploying user lacks the **Service principal: User** role on the jobs' principal. Step 3 gives it to the user running the install; when someone else deploys, run step 3 with `DEPLOYER=<user>`. |
 
 ## Setup
 
@@ -52,8 +56,17 @@ These pages assume SENZING® entity resolution installed with the default names 
 
 ## A run does not start
 
-The App starts no ingest run until every condition holds. **Start a run** and the change watch both
-refuse with the first one that fails:
+The watcher starts a run for a change only when ingest is not paused, the installed release is current
+and no ingest or setup run is active; it runs every 5 minutes and waits a few minutes for its serverless
+compute, so allow about 10 minutes. When a change still starts nothing, read the watcher's error on
+**Status** or its job run's driver log:
+
+| Watcher error | Fix |
+|---|---|
+| "the engine password … is missing from secret scope …" | The automatic upgrade needs it: click **Upgrade** on the Setup page, which creates it. |
+| "App … not found" | The upgrade runs setup with the App's service principal. Deploy the bundle again so the App exists. |
+| "PERMISSION_DENIED" on the App or a job | The watcher runs as the jobs' principal, which needs CAN MANAGE on the App and CAN MANAGE RUN on the setup and ingest jobs: run `scripts/admin.sh post` again. |
+**Start a run** refuses with the first condition that fails:
 
 | Message | Fix |
 |---|---|
@@ -88,6 +101,14 @@ refuse with the first one that fails:
 | The mart trails ingest more and more | Look at the latest `_loop_health` rows: a growing `backlog_affected` with high `get_ms` or `merge_ms` in `MART_REFRESH` means the cluster (slots) or Lakebase is too small for the load. `pg_waits`, and `pg_connections_used` near `pg_connections_limit`, point at Lakebase. |
 | `LOOP_HEALTH_ERROR` in the run log | One signal could not be read (its `part`); that column is NULL and the run is unaffected. |
 | `_affected` or `_loop_health` keeps many small files | The run compacts and vacuums them daily. |
+
+## Costs
+
+| Symptom | Cause and fix |
+|---|---|
+| The App's page does not load after a quiet spell | The App stopped itself after 30 idle minutes. Click **Start** on it in the workspace's **Apps** page; ingest went on without it. To keep it up, turn on **Keep running** on **Status**. |
+| A budget alert fired | Look on **Status** for a run that does not end (a busy run ends after 6 hours) and for **Keep running** left on. The job clusters bill only while a run lasts; the watcher's runs are short. Pause ingest to stop new runs. |
+| No budget alert ever arrives | Budgets are set outside the App: a Databricks budget (account admin) and an AWS budget. See [What it costs to run](../README.md#what-it-costs-to-run). |
 
 ## Reading the Lakebase waits
 

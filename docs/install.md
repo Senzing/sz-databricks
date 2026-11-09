@@ -8,7 +8,7 @@ does this once per workspace, and again for each new release. Start with the
 
 Download one release's files into a directory and verify them. `<download-dir>` below is that
 directory's absolute path: the install script runs from the bundle directory inside it. Replace
-`<release>` with the release, for example `0.1.0-rc.1`, and `<catalog>` with the Unity Catalog
+`<release>` with the release, for example `4.4.3-1`, and `<catalog>` with the Unity Catalog
 catalog that will hold the SENZING® entity resolution schemas. Every command uses your Databricks
 CLI profile (`DATABRICKS_CONFIG_PROFILE`, or the default profile).
 
@@ -46,12 +46,13 @@ It runs these steps, each printed before it runs:
 | Step | What it does |
 |---|---|
 | 1 verify | `scripts/verify-release.sh <download-dir> <release>`: nothing runs from an unverified release |
-| 2 pre | `scripts/admin.sh pre`: creates the two schemas (`senzing_internal`, `senzing`) and the Volume, the `sz-databricks-app` group and the jobs' service principal (below) |
-| 3 bind | binds those schemas and the Volume to the bundle (`databricks bundle deployment bind`), so one deploy is enough |
-| 4 deploy | `databricks bundle deploy -t prod`: the App, the jobs, the Lakebase project, the secret scope, the SQL warehouse and the grants; the jobs' JAR goes to the Volume |
-| 5 post | `scripts/admin.sh post`: the App's service principal joins the `sz-databricks-app` group and gets CAN MANAGE on the App and USE CATALOG |
-| 6 grant | only with `--var consumer_group=<group>`: `scripts/admin.sh consumer` gives that group USE CATALOG, and USE SCHEMA and SELECT on the results schema |
-| 7 start | `databricks bundle run sz_app -t prod`: starts the App |
+| 2 size | `scripts/node-sizing.sh <node_type_id> <executor_memory> <worker_task_slots>`: stops the install, printing the numbers, when one worker of the node type cannot hold that many engine threads at 1 GB each ([engine threads per worker](use.md#sizing)) |
+| 3 pre | `scripts/admin.sh pre`: creates the two schemas (`senzing_internal`, `senzing`) and the Volume, the `sz-databricks-app` group and the jobs' service principal (below) |
+| 4 bind | binds those schemas and the Volume to the bundle (`databricks bundle deployment bind`), so one deploy is enough |
+| 5 deploy | `databricks bundle deploy -t prod`: the App, the jobs, the Lakebase project, the secret scope, the SQL warehouse and the grants; the jobs' JAR goes to the Volume |
+| 6 post | `scripts/admin.sh post`: the App's service principal joins the `sz-databricks-app` group and gets CAN MANAGE on the App and USE CATALOG |
+| 7 grant | only with `--var consumer_group=<group>`: `scripts/admin.sh consumer` gives that group USE CATALOG, and USE SCHEMA and SELECT on the results schema |
+| 8 start | `databricks bundle run sz_app -t prod`: starts the App |
 
 Every step is idempotent: a re-run skips what exists, and a failed step prints the command that
 resumes there (`--from <step>`).
@@ -61,8 +62,8 @@ resumes there (`--from <step>`).
 | Line | Meaning |
 |---|---|
 | `STEP <n> <name>: <command>` | step `<n>` starts and runs `<command>` |
-| `SKIP bind: <key> <id> already bound` | step 3 finds that schema or Volume bound already |
-| `job_run_as=<application-id>` | step 2 printed the jobs' service principal |
+| `SKIP bind: <key> <id> already bound` | step 4 finds that schema or Volume bound already |
+| `job_run_as=<application-id>` | step 3 printed the jobs' service principal |
 | `install.sh: step <name> failed; after fixing it, resume with: <command>` | the run stopped; fix the cause, then run `<command>` |
 | `Dry run: nothing changed.` | the `--dry-run` finished |
 | `Installed (target <target>).` | every step succeeded |
@@ -79,7 +80,7 @@ After the last line it prints the two GRANT statements that let another group re
 | `app_name` | `sz-databricks` | the App's name; the jobs, the warehouse and the cluster policy are named after it |
 | `lakebase_project` | the App's name | the Lakebase project id (unique in the workspace) |
 | `warehouse_id` | the warehouse the bundle creates | a SQL warehouse you already have for the App (the bundle's is still created, and stays stopped) |
-| `job_run_as` | created by step 2 | the application id of a service principal you already have for the jobs |
+| `job_run_as` | created by step 3 | the application id of a service principal you already have for the jobs |
 | `payload_source` | `github-release` | where the setup job reads the engine payload ([step 1](#1-choose-the-payload-source)) |
 
 The cluster and Lakebase sizes are bundle variables too ([Sizing](use.md#sizing)). Use dedicated
@@ -169,6 +170,16 @@ below; the installer has it.
 
 Verify: the Setup section reads `Status: ok`, and the Lakebase section shows the PostgreSQL version
 and `max_connections`. **Check** runs setup's checks again without changing anything.
+
+5. **Budget alerts.** Before you load data, have an account admin create a
+   [Databricks budget](https://docs.databricks.com/aws/en/admin/account-settings/budgets) with an email
+   alert (it tracks the DBU spend of the App, the jobs, the SQL warehouse and Lakebase), and create an
+   [AWS budget](https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html)
+   for the job clusters' EC2 instances and EBS volumes, which AWS bills. The Setup page links both. A
+   budget alerts and never stops anything.
+
+The App stops itself after 30 idle minutes; ingest goes on without it. Start it again from the
+workspace's **Apps** page ([The App stops itself when idle](use.md#the-app-stops-itself-when-idle)).
 
 ## No data of your own? Load the CORD sample
 

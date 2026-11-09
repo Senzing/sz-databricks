@@ -4,14 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The changelog format is based on [Keep a Changelog] and [CommonMark].
 
-Versions here are the releases of sz-databricks, tagged `v<major>.<minor>.<patch>`; a release
-candidate is `v<major>.<minor>.<patch>-rc.<n>` and is published as a prerelease.
+Versions here are the releases of sz-databricks, `<senzing_version>-<build>` (for example
+`4.4.3-1`): the Senzing version the release carries and a build counter that restarts at 1 for
+each Senzing version.
 
-## [0.1.0-rc.1] - Unreleased
+## [Unreleased]
 
 ### Added
 
-- First release candidate: Senzing entity resolution that runs entirely in your Databricks
+- First release: Senzing entity resolution that runs entirely in your Databricks
   workspace. A Databricks App (setup, EULA and license, sources, start, pause and status), a setup
   job and an ingest job on classic job clusters, and the Senzing repository in Lakebase
   Autoscaling, all created by one Databricks Asset Bundle (`scripts/install.sh`).

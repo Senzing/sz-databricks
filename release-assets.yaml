@@ -1,6 +1,6 @@
 # The files of an sz-databricks release, as scripts/check_release_assets.sh checks them before anything
 # is signed. Flat on purpose (scripts/build_yaml.sh reads one key at a time).
-# {release} is the tag without its v (e.g. 1.2.3 or 1.2.3-rc.1); {arch} is each of release_archs.
+# {release} is the tag, <senzing_version>-<build> (e.g. 4.4.3-7); {arch} is each of release_archs.
 ---
 release_app_binary: "sz-databricks-app-{release}-x86_64-linux-musl"
 release_app_jar: "sz-databricks-engine-{release}.jar"
@@ -10,7 +10,7 @@ release_bundle_archive: "sz-databricks-bundle-{release}.tar.gz"
 release_sums: SHA256SUMS
 release_archs: "aarch64 x86_64"
 # Every file of the bundle tarball (directories aside); app/ and lib/ hold the loose App binary and engine JAR.
-bundle_members: "bundle/app/.gitignore bundle/app/sz-databricks-app bundle/databricks.yml bundle/lib/.gitignore bundle/lib/sz-databricks-engine-{release}.jar bundle/resources/app.yml bundle/resources/jobs.yml bundle/resources/lakebase.yml bundle/resources/schema.yml bundle/resources/secrets.yml bundle/resources/volume.yml bundle/resources/warehouse.yml bundle/scripts/admin.sh bundle/scripts/install.sh bundle/scripts/lakebase-setup.sql bundle/scripts/verify-release.sh"
+bundle_members: "bundle/app/.gitignore bundle/app/sz-databricks-app bundle/dashboards/sz_status.lvdash.json bundle/databricks.yml bundle/lib/.gitignore bundle/lib/sz-databricks-engine-{release}.jar bundle/lib/sz-databricks-watch-{release}.jar bundle/resources/app.yml bundle/resources/dashboard.yml bundle/resources/jobs.yml bundle/resources/lakebase.yml bundle/resources/schema.yml bundle/resources/secrets.yml bundle/resources/volume.yml bundle/resources/warehouse.yml bundle/resources/watch.yml bundle/scripts/admin.sh bundle/scripts/install.sh bundle/scripts/lakebase-setup.sql bundle/scripts/node-sizing.sh bundle/scripts/node-sizing.yaml bundle/scripts/verify-release.sh"
 bundle_app_binary: bundle/app/sz-databricks-app
 bundle_app_jar: "bundle/lib/sz-databricks-engine-{release}.jar"
 # Every file of the engine JAR under these directories: the contract and the release facts setup trusts.
