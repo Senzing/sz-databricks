@@ -212,21 +212,38 @@ minutes with no new commit and no redo it ends and the cluster stops; a busy run
 and the next change starts a fresh one. Commits that land while a run is active are ingested by that
 run. One run at a time.
 
-The App watches for changes itself. Every minute it reads each registered base table's latest Delta
-commit version from Unity Catalog's table metadata, which starts no warehouse or cluster. When a
-version moved, it starts the job, unless a run is running or queued. Any commit counts, even one that
-changes no rows.
+The watcher job (`sz-databricks-watch`, serverless) watches for changes, so the App need not run. Every
+5 minutes (the bundle variable `watch_cron`) it reads each registered base table's latest Delta commit
+version from Unity Catalog's table metadata and lists each files source's folder, which starts no
+warehouse or cluster. When a version or a folder moved, it starts the job, unless ingest is paused, a
+run is running or queued, or a setup run is active. Any commit counts, even one that changes no rows. A
+watcher run waits a few minutes for its serverless compute before it reads anything, so a change starts
+a run up to about 10 minutes after it lands. **Status** shows the watcher's last run and what it found.
 
 **Pause** stops new work: the App starts no run, and a run in progress stops cleanly. The engine
 reads the pause at its next poll, takes no new work, lets the chunks in flight commit and ends
-`paused`. **Status** shows "pausing…", then `paused`. The App cancels the run only as a fallback, when
-it has not stopped within about 30 seconds. Every position is durable when its step commits, so the next
+`paused`. **Status** shows "pausing…", then `paused`. Pause also starts a watcher run, which cancels the
+ingest run only as a fallback, when it has not stopped 30 seconds after the engine saw the pause; with
+the watcher's start-up (and its next scheduled run, when one was already running) that fallback lands
+within about 10 minutes. Every position is durable when its step commits, so the next
 run resumes from them; at most one chunk per engine slot (500 records) is applied again, each as a
 replace, so nothing is doubled. Changes made while paused wait in the Change Data Feed (or the
 folder). **Resume** clears the pause and starts a run.
 
-Between runs no compute is left running but the App: the job cluster stops, Lakebase scales to zero
-after 30 idle minutes and the SQL warehouse after 5.
+Between runs nothing is left running but the watcher's short scheduled runs and the App while you use
+it: the job cluster stops, Lakebase scales to zero after 30 idle minutes and the SQL warehouse after 5.
+
+### The App stops itself when idle
+
+The App's compute bills while it runs (**Status** shows its DBUs per hour, next to **Keep running**).
+After 30 minutes without a page view or action it stops itself; the watcher stops it too if it missed
+that. Ingest does not need it: the watcher starts runs, follows pauses and upgrades with the App
+stopped. Opening the App's URL does not start it: click **Start** on the App in the workspace's
+**Apps** page. Turn on **Keep running** on **Status** to keep it up; it then bills until you turn that
+off or stop it. To watch ingest without starting the App, open the `sz-databricks status` dashboard
+(workspace **Dashboards**): runs, engine health, quarantined records, each source's position and the
+mart's counts. It reads with your own access, so you need SELECT on both schemas. Its `mart_schema`
+parameter names the mart schema (default `senzing`); set it there if you installed another.
 
 ### Bottlenecks on the Status page
 
@@ -356,12 +373,12 @@ differs. The defaults:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `node_type_id` | `r6g.large` | Graviton (arm64), 2 cores, 16 GB. Any node type works (both arm64 and x86_64 libraries ship). Size memory for the engine: about 4 GB per engine process plus 0.5-1 GB per engine thread, outside the JVM heap, growing with the repository; prefer memory-optimized types and fewer, larger workers |
+| `node_type_id` | `r6g.xlarge` | Graviton (arm64), 4 cores, 32 GB. Any node type works (both arm64 and x86_64 libraries ship); prefer memory-optimized types and fewer, larger workers, since each worker's engine needs 4 GB before its threads. Change `worker_task_slots` with it (below) |
 | `autoscale_min`, `autoscale_max` | `1`, `2` | ingest job cluster workers (equal for a fixed size) |
-| `worker_task_slots` | `12` | engine threads (Spark task slots) per worker: the node type's cores x 6. The engine runs 4-8 threads per core against a cloud database, since its threads wait on database round trips |
+| `worker_task_slots` | `18` | engine threads (Spark task slots) per worker, at most the smaller of the node type's cores x 6 (the engine runs 4-8 threads per core against a cloud database, since its threads wait on database round trips) and the threads its memory holds at 1 GB each (below) |
 | `cluster_slots` | empty | the most engine partitions (Spark tasks, each running one engine thread) a run uses at once. Empty: `autoscale_max` x `worker_task_slots`, so you size the cluster in one place. Set it only to override that (too low throttles; too high only queues tasks) |
-| `executor_memory` | `4g` | JVM heap of each ingest executor; keep it small, the rest of the node is the engine's native memory |
-| `ebs_volume_size` | `100` | GiB of the one EBS volume per node: node types without local disks (the default `r6g.large`) need one |
+| `executor_memory` | `4g` | JVM heap of each ingest executor; keep it small, the rest of the node is the engine's native memory, and a larger heap leaves room for fewer engine threads |
+| `ebs_volume_size` | `100` | GiB of the one EBS volume per node: node types without local disks (the default `r6g.xlarge`) need one |
 | `on_demand_nodes` | `1` | job cluster nodes on demand, the driver first; the rest are spot with fallback. A reclaimed driver loses the run; set it above the worker count when a spot reclaim must not slow a run |
 | `spark_version` | `17.3.x-scala2.13` | Databricks Runtime 17.3 LTS (Spark 4.0, Scala 2.13) |
 | `data_security_mode` | `SINGLE_USER` | the access mode the UI calls **Dedicated**, here to the jobs' service principal (`USER_ISOLATION`, the UI's **Standard**, also needs the Volume's `lib/` on the metastore allowlist) |
@@ -372,6 +389,20 @@ differs. The defaults:
 | `warehouse_size`, `warehouse_auto_stop_mins` | `2X-Small`, `5` | the SQL warehouse the bundle creates for the App |
 | `pg_sslmode`, `pg_sslrootcert` | `verify-full`, `/etc/ssl/certs/ca-certificates.crt` | the engine's Lakebase TLS |
 
+**Engine threads per worker.** Each ingest worker runs one engine, whose memory is outside the JVM heap:
+4 GB for the engine plus 1 GB per engine thread. A worker holds at most
+
+    min(cores x 6, floor((node memory - executor_memory - 4 GB - Databricks reserve) / 1 GB))
+
+engine threads, where the Databricks reserve, the memory Databricks keeps for the node's own services, is
+3% of the node plus 4800 MB. The default `r6g.xlarge` (32 GB) beside the `4g` heap holds 18 (its 4 cores
+would allow 24); an `r6g.2xlarge` (64 GB) holds 48 beside `4g` and 45 beside `8g`; an `r6g.large` (16 GB)
+holds 2. The rule's numbers are in `scripts/node-sizing.yaml`. Step 2 of the install script,
+`scripts/node-sizing.sh <node_type_id> <executor_memory> <worker_task_slots>`, reads the node type's cores
+and memory from `databricks clusters list-node-types` and stops the install before anything changes when
+`worker_task_slots` is above that count, printing the numbers; it never lowers the value for you. Run it
+yourself before a deploy without the install script.
+
 The setup job runs on a single-node cluster of the same node type, which needs capacity in your
 region. The engine's concurrency is bounded by the Lakebase vCPU and by `cluster_slots`. To size Lakebase
 up, raise `lakebase_min_cu`, `lakebase_max_cu` and `lakebase_vcpu` together, in the default's
@@ -381,11 +412,14 @@ Setup page shows the resulting limit and whether threads or connections set it.
 
 ## Upgrade
 
-Download and verify the new release, then run its install script with the same `--var`s. The new App
-sees that setup installed an older release: Setup and Status show "Upgrade required", and it starts
-no run. It then upgrades by itself, once per release: it pauses ingest, waits until no run is active,
-runs setup Upgrade (stages the new release's engine payload, the Senzing runtime the jobs run, and
-updates the tables) and resumes if it paused.
+Download and verify the new release, then run its install script with the same `--var`s. The
+deploy replaces the watcher too, and its next run sees that setup installed an older release: Setup and
+Status show "Upgrade required", and no run starts. The watcher then upgrades by itself, once per
+release and with the App stopped: it pauses ingest, waits until no run is active, runs setup Upgrade
+(stages the new release's engine payload, the Senzing runtime the jobs run, and updates the tables) and
+resumes if it paused. Setup Upgrade needs the engine's Lakebase password in the secret scope, which
+Install stores; when it is missing the watcher starts nothing and **Status** names the fix: click
+**Upgrade** on the Setup page.
 
 If that Upgrade fails it is not tried again and ingest stays paused: fix the cause and click
 **Upgrade** on the Setup page (the pause then clears). An App older than the installed release refuses

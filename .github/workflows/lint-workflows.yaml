@@ -6,8 +6,8 @@ on:
 
 concurrency:
   # `github.ref`, not `head_ref || ref_name`: those two put a branch named
-  # `1.0.0` and a tag named `1.0.0` into the same concurrency group, and this
-  # repository's tags are v<semver>. `github.ref` cannot collide.
+  # `4.4.3-7` and a tag named `4.4.3-7` into the same concurrency group, and this
+  # repository's tags are <senzing_version>-<build>. `github.ref` cannot collide.
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 

@@ -3,7 +3,7 @@ name: Sign release
 # Signs the files of a release as THIS workflow, so that customers verify one
 # identity that names only this repository:
 #
-#   https://github.com/Senzing/sz-databricks/.github/workflows/sign-release.yaml@refs/tags/v<release>
+#   https://github.com/Senzing/sz-databricks/.github/workflows/sign-release.yaml@refs/tags/<release>
 #
 # THIS WORKFLOW AUTHENTICATES TO NOTHING OUTSIDE THIS REPOSITORY, and it builds
 # nothing. The release -- the App binary, the engine JAR, the payload archives,
@@ -14,9 +14,9 @@ name: Sign release
 # each file, SHA256SUMS included. Keep it that way: no credential here may reach
 # anything else.
 #
-# THE TAG IS v<major>.<minor>.<patch>, or v<major>.<minor>.<patch>-rc.<n> for a
-# release candidate, which must be published as a prerelease (and a release
-# without the suffix must not be).
+# THE RELEASE IS <senzing_version>-<build>, e.g. 4.4.3-7: no `v`, an integer
+# build. These are releases, not pre-releases, so "latest" is decided by the
+# publisher with scripts/version_order.sh.
 #
 # THERE IS DELIBERATELY NO workflow_dispatch: a manual run that SIGNED something
 # would sign without a release and route around the checks below.
@@ -60,6 +60,11 @@ jobs:
       # `github.event.release.tag_name` becomes part of the signing identity, so it
       # is checked before anything is downloaded.
       #
+      # <senzing_version>-<build> and nothing else: no `v`, no leading zeros, no
+      # pre-release suffix. GitHub's "Set as a pre-release" checkbox is not part
+      # of the tag at all, so a release ticked that way passes every string test
+      # here; it is rejected for the same reason: `latest` would skip it.
+      #
       # WHO PUBLISHED IT. A release signed here must have been authored by the
       # account whose fine-grained token the build publishes with, whose login is
       # the repository variable PAYLOAD_PUBLISHER_LOGIN. Fail closed: with the
@@ -78,14 +83,12 @@ jobs:
           EXPECTED_AUTHOR: ${{ vars.PAYLOAD_PUBLISHER_LOGIN }}
         run: |
           set -euo pipefail
-          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$ ]]; then
-            echo "::error::Release tag '${TAG}' is not v<major>.<minor>.<patch>[-rc.<n>] (no leading zeros)."
+          if [[ ! "$TAG" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-[1-9][0-9]*$ ]]; then
+            echo "::error::Release tag '${TAG}' is not <senzing_version>-<build> (e.g. 4.4.3-7: no v prefix, an integer build, no leading zeros)."
             exit 1
           fi
-          want_prerelease=false
-          if [[ "$TAG" == *-* ]]; then want_prerelease=true; fi
-          if [ "$PRERELEASE" != "$want_prerelease" ]; then
-            echo "::error::Release ${TAG} has prerelease=${PRERELEASE}; a release candidate (-rc.<n>) must be a prerelease and a release must not be."
+          if [ "$PRERELEASE" = "true" ]; then
+            echo "::error::Release ${TAG} is marked as a pre-release; clear 'Set as a pre-release' or cut a normal release."
             exit 1
           fi
           if [ -z "$EXPECTED_AUTHOR" ]; then
@@ -102,7 +105,7 @@ jobs:
             echo "::error::Release ${TAG} targets ${target}, not main's HEAD ${head}. Refusing to sign it."
             exit 1
           fi
-          echo "[INFO] release ${TAG} (prerelease=${PRERELEASE}) on main ${head}, published by ${AUTHOR}"
+          echo "[INFO] release ${TAG} (a <senzing_version>-<build>, non-pre-release version) on main ${head}, published by ${AUTHOR}"
 
       # `release: published` FIRES ON THE RELEASE, NOT ON ITS ASSETS. The publisher
       # creates the release with its files in one call; this wait is the backstop
@@ -127,7 +130,7 @@ jobs:
             names="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
               --jq '.assets[] | select(.state == "uploaded") | .name')"
             if printf '%s\n' "$names" | grep -qx 'SHA256SUMS.sigstore.json'; then
-              echo "::error::Release ${TAG} already carries SHA256SUMS.sigstore.json: a signed version is never re-signed. Cut the next version instead."
+              echo "::error::Release ${TAG} already carries SHA256SUMS.sigstore.json: a signed version is never re-signed. Cut the next build instead."
               exit 1
             fi
             if printf '%s\n' "$names" | grep -qx 'SHA256SUMS'; then
@@ -163,7 +166,7 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          RELEASE_REPO="$GITHUB_REPOSITORY" scripts/check_release_assets.sh assets "${TAG#v}"
+          RELEASE_REPO="$GITHUB_REPOSITORY" scripts/check_release_assets.sh assets "$TAG"
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
