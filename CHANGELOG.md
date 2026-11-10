@@ -8,7 +8,29 @@ Versions here are the releases of sz-databricks, `<senzing_version>-<build>` (fo
 `4.4.3-1`): the Senzing version the release carries and a build counter that restarts at 1 for
 each Senzing version.
 
-## [Unreleased]
+## [4.4.3-3] - 2026-11-10
+
+### Fixed
+
+- A first install works: on an empty internal schema the App creates its tables (as setup defines
+  them) and hands them to the jobs' service principal, so the Setup page opens before the first
+  setup run instead of failing with `TABLE_OR_VIEW_NOT_FOUND` on `sz_app_state`. While it cannot
+  create them, its pages name the cause and the grants to check.
+- The install script checks the workspace before it creates anything, a dry run included
+  (`scripts/preflight.sh`): it stops on a serverless-only workspace, and on your existing deployment
+  of the bundle in another catalog, App or Lakebase project. Its bind step reads the deployment from
+  the workspace, never a stale local cache.
+- `scripts/admin.sh post` waits up to a minute for the group `admin.sh pre` just created.
+
+### Changed
+
+- Uninstall in the use guide: `databricks bundle destroy` with `--auto-approve`, what to do after an
+  install that created no App, and the group and service principal the destroy leaves.
+- The AI-assisted install checks for a serverless-only workspace in step 1 and the dry run's exit
+  code in step 5.
+
+## [4.4.3-2] - 2026-11-09
+
 
 ### Changed
 

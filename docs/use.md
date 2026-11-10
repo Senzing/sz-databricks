@@ -430,7 +430,8 @@ roll back.
 ## Uninstall
 
 On **Setup**, in **Uninstall**, type `uninstall` to confirm. The App pauses ingest and cancels the
-jobs' active runs.
+jobs' active runs. If an install failed before it created the App, there is no Setup page and
+nothing runs yet: skip this and destroy the bundle (below).
 
 Your data is kept unless you also tick **Also delete data** and type `delete data`. Data means:
 
@@ -442,12 +443,28 @@ Your data is kept unless you also tick **Also delete data** and type `delete dat
 The staged payload and the jobs' JAR stay until you destroy the bundle. From the bundle directory:
 
 ```sh
-databricks bundle destroy -t prod --var catalog=<catalog> --var job_run_as=<jobs-sp-application-id>
+databricks bundle destroy -t prod --var catalog=<catalog> --var job_run_as=<jobs-sp-application-id> --auto-approve
 ```
 
-Add any other `--var` you installed with. It removes everything the bundle created, the
-App, both jobs, the schemas and Volume (with the staged payload), the secret scope and the Lakebase
-project (with the Senzing repository).
+Add any other `--var` you installed with. `--auto-approve` confirms the deletions; without it the
+command asks, and fails when nothing can answer (a script or an assistant runs it). It removes
+everything the bundle created, the App, both jobs, the schemas and Volume (with the staged payload),
+the secret scope and the Lakebase project (with the Senzing repository).
+
+Two things the install script created outside the bundle remain:
+
+- the group `sz-databricks-app`. Delete it once no install uses it:
+  `databricks groups list --filter 'displayName eq "sz-databricks-app"' -o json | jq -r '.[0].id'`
+  gives its id, then `databricks groups delete <id>`;
+- the service principal `sz-databricks-jobs`. It belongs to your Databricks account, not only this
+  workspace: leave it (a later install uses it again), or remove only its access to this workspace
+  in the workspace's admin settings (**Identity and access**, **Service principals**). Deleting it in
+  the account removes it from every workspace.
+
+Each user has one deployment of the bundle per target. To install in another catalog, or with
+another App name or Lakebase project, uninstall and destroy this one first: the install script stops
+on the existing deployment, naming it, before it creates anything. Running it again with the same
+catalog, App and project upgrades that install.
 
 ## Reference
 
