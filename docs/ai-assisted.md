@@ -86,25 +86,23 @@ Fill in the placeholders and paste:
 >    `gh release download <release> --repo Senzing/sz-databricks --dir <dir>`. If `gh` is missing
 >    or `gh auth status` fails, ask me to download every file of the release from
 >    https://github.com/Senzing/sz-databricks/releases into `<dir>` and wait until I say it is done.
->    Verify: `<dir>` holds `SHA256SUMS`, `SHA256SUMS.sigstore.json` and one `.sigstore.json` per
->    file `SHA256SUMS` lists. If `SHA256SUMS.sigstore.json` is missing, the release is still being
+>    Verify: `<dir>` holds `SHA256SUMS`, `SHA256SUMS.sigstore.json` and every file `SHA256SUMS`
+>    lists. If `SHA256SUMS.sigstore.json` is missing, the release is still being
 >    signed: wait 5 minutes and download again with `--skip-existing` added; stop after 3 tries.
-> 3. **Verify.** Run this; it stops at the first file that fails:
+> 3. **Verify.** Run this; it stops when the signature or any file fails:
 >
 >    ```sh
 >    (
 >      cd <dir> || exit 1
->      for f in $(awk '{print $2}' SHA256SUMS) SHA256SUMS; do
->        cosign verify-blob --bundle "$f.sigstore.json" \
->          --certificate-identity "https://github.com/Senzing/sz-databricks/.github/workflows/sign-release.yaml@refs/tags/<release>" \
->          --certificate-oidc-issuer https://token.actions.githubusercontent.com "$f" \
->          || { echo "FAIL $f"; exit 1; }
->      done
+>      cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+>        --certificate-identity "https://github.com/Senzing/sz-databricks/.github/workflows/sign-release.yaml@refs/tags/<release>" \
+>        --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS \
+>        || { echo "FAIL SHA256SUMS"; exit 1; }
 >      if command -v sha256sum >/dev/null; then sha256sum -c SHA256SUMS; else shasum -a 256 -c SHA256SUMS; fi
 >    )
 >    ```
 >
->    Every file must print `Verified OK`, then `OK`; the command must exit 0. If it prints
+>    `cosign` must print `Verified OK`, then every file `OK`; the command must exit 0. If it prints
 >    `FAIL` or `FAILED` or exits non-zero, stop, show me the output and install nothing.
 >
 >    On success: unpack the bundle with `cd <dir> && tar -xzf sz-databricks-bundle-<release>.tar.gz`.

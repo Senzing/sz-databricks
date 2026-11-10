@@ -6,13 +6,14 @@ name: Sign release
 #   https://github.com/Senzing/sz-databricks/.github/workflows/sign-release.yaml@refs/tags/<release>
 #
 # THIS WORKFLOW AUTHENTICATES TO NOTHING OUTSIDE THIS REPOSITORY, and it builds
-# nothing. The release -- the App binary, the engine JAR, the payload archives,
-# the bundle tarball and SHA256SUMS -- is built elsewhere and PUSHED here, as a
-# release created by a single publishing account. This workflow reads that
-# release with its own GITHUB_TOKEN, checks it, signs each file keyless (cosign
-# sign-blob, the OIDC token of this run) and attaches <file>.sigstore.json for
-# each file, SHA256SUMS included. Keep it that way: no credential here may reach
-# anything else.
+# nothing. The release -- the payload archives, the bundle tarball (with the App
+# binary and the engine JAR) and SHA256SUMS -- is built elsewhere and PUSHED here,
+# as a release created by a single publishing account. This workflow reads that
+# release with its own GITHUB_TOKEN, checks it, signs SHA256SUMS keyless (cosign
+# sign-blob, the OIDC token of this run) and attaches SHA256SUMS.sigstore.json.
+# The signature proves the list; each file's SHA-256 in it proves the file, so
+# one signature covers the whole release. Keep it that way: no credential here
+# may reach anything else.
 #
 # THE RELEASE IS <senzing_version>-<build>, e.g. 4.4.3-7: no `v`, an integer
 # build. These are releases, not pre-releases, so "latest" is decided by the
@@ -41,7 +42,7 @@ jobs:
   sign:
     name: sign the release files
     permissions:
-      # Attaches the signatures to the release this workflow was triggered by.
+      # Attaches the signature to the release this workflow was triggered by.
       contents: write
       # The keyless signing identity.
       id-token: write
@@ -112,11 +113,9 @@ jobs:
       # for a release cut the other way round. An asset's `state` is `open` while
       # it is uploading and `uploaded` once complete.
       #
-      # A SIGNED VERSION IS NEVER RE-SIGNED. SHA256SUMS.sigstore.json is attached
-      # last, so its presence means a signing run finished; a second one would put
-      # a signature on whatever the release holds now. A run that failed before
-      # that file left partial *.sigstore.json files, which the exact-set check
-      # refuses: delete them from the release, then re-run.
+      # A SIGNED VERSION IS NEVER RE-SIGNED. SHA256SUMS.sigstore.json is the one
+      # signature, so its presence means a signing run finished; a second one would
+      # put a signature on whatever the release holds now.
       - name: Download the release files
         env:
           GH_TOKEN: ${{ github.token }}
@@ -159,8 +158,8 @@ jobs:
       # on the same release. What stands between a swapped file and a signature is
       # who may create the release (the author check), what it targets (main's
       # HEAD), and that a signed version is never re-signed. The set is exact:
-      # every file found here is signed, so an extra one is refused, and the
-      # engine JAR's payload digests must match the payload archives.
+      # SHA256SUMS must list every file found here and nothing else, and the
+      # bundle's engine JAR's payload digests must match the payload archives.
       - name: The release files are the contracted set and match SHA256SUMS
         env:
           TAG: ${{ github.event.release.tag_name }}
@@ -171,26 +170,25 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      # Every file and SHA256SUMS itself, keyless, as this workflow at this tag.
-      # Each signature is verified straight away against the exact identity
-      # customers use; SHA256SUMS goes last, so its signature marks a finished run.
-      - name: Sign every file (cosign sign-blob)
+      # SHA256SUMS, keyless, as this workflow at this tag, after every file in it
+      # matched its checksum. The signature is verified straight away against the
+      # exact identity customers use.
+      - name: Sign SHA256SUMS (cosign sign-blob)
         env:
           WORKFLOW_REF: ${{ github.workflow_ref }}
         working-directory: assets
         run: |
           set -euo pipefail
           mkdir -p ../bundles
-          for asset in $(awk '{ print $2 }' SHA256SUMS) SHA256SUMS; do
-            cosign sign-blob --yes --bundle "../bundles/${asset}.sigstore.json" "$asset"
-            cosign verify-blob --bundle "../bundles/${asset}.sigstore.json" \
-              --certificate-oidc-issuer "$OIDC_ISSUER" \
-              --certificate-identity "https://github.com/${WORKFLOW_REF}" \
-              "$asset" > /dev/null
-          done
+          sha256sum -c SHA256SUMS
+          cosign sign-blob --yes --bundle ../bundles/SHA256SUMS.sigstore.json SHA256SUMS
+          cosign verify-blob --bundle ../bundles/SHA256SUMS.sigstore.json \
+            --certificate-oidc-issuer "$OIDC_ISSUER" \
+            --certificate-identity "https://github.com/${WORKFLOW_REF}" \
+            SHA256SUMS > /dev/null
           ls -l ../bundles
 
-      - name: Attach the signatures to the release
+      - name: Attach the signature to the release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
@@ -201,20 +199,15 @@ jobs:
           {
             echo
             echo "## Verify"
-            echo "Every file is signed as \`${identity}\`; see README.md."
+            echo "\`SHA256SUMS\` is signed as \`${identity}\`, and it holds the SHA-256 of every file; see README.md."
             echo '```bash'
+            echo "cosign verify-blob --bundle SHA256SUMS.sigstore.json --certificate-identity '${identity}' \\"
+            echo "  --certificate-oidc-issuer ${OIDC_ISSUER} SHA256SUMS"
             echo "sha256sum -c SHA256SUMS"
-            echo "cosign verify-blob --bundle <file>.sigstore.json --certificate-identity '${identity}' \\"
-            echo "  --certificate-oidc-issuer ${OIDC_ISSUER} <file>"
             echo '```'
           } > notes.md
           body="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)"
           printf '%s\n%s\n' "$body" "$(cat notes.md)" > full.md
-          # SHA256SUMS.sigstore.json last: it marks a finished run.
-          for f in bundles/*.sigstore.json; do
-            [ "$f" = bundles/SHA256SUMS.sigstore.json ] && continue
-            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "$f"
-          done
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber bundles/SHA256SUMS.sigstore.json
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file full.md
           cat notes.md >> "$GITHUB_STEP_SUMMARY"

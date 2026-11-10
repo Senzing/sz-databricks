@@ -83,9 +83,8 @@ use it.
 | `sz-databricks-bundle-<release>.tar.gz` | what you install from: the bundle (`databricks.yml`, `resources/`), the App binary in `app/`, the engine JAR in `lib/` and the scripts `scripts/install.sh`, `scripts/admin.sh`, `scripts/verify-release.sh` and `scripts/lakebase-setup.sql` |
 | `sz-databricks-engine-shared-<release>.tar.gz` | the engine payload's shared part: the Senzing runtime the setup job stages into your Volume |
 | `sz-databricks-engine-native-<release>-linux-aarch64.tar.gz`, `sz-databricks-engine-native-<release>-linux-x86_64.tar.gz` | the engine payload's native libraries, one archive per architecture; together with the shared archive about 600 MB |
-| `sz-databricks-engine-<release>.jar` | the engine JAR the jobs run (also inside the bundle) |
-| `sz-databricks-app-<release>-x86_64-linux-musl` | the App binary (also inside the bundle) |
-| `SHA256SUMS`, `*.sigstore.json` | checksums, and a keyless cosign signature for every file above and for `SHA256SUMS` |
+| `SHA256SUMS` | the SHA-256 checksum of every file above |
+| `SHA256SUMS.sigstore.json` | the keyless cosign signature of `SHA256SUMS`: one signature covers the release |
 
 A release is named `<senzing_version>-<build>`, for example `4.4.3-1`: the Senzing SDK version it
 carries and a build counter that restarts at 1 for each SDK version, so `4.4.3-10` is a later build
@@ -176,22 +175,22 @@ loads one data source as a files source, with no mapping view.
 
 ## Verify
 
-Every release file is signed keyless with Sigstore by this repository's `sign-release.yaml`
-workflow on the tag `<release>`, and `SHA256SUMS` lists them all. The identity is exact, so a file
-signed for another tag does not pass. In the directory that holds the release files:
+`SHA256SUMS` lists the checksum of every release file, and it is signed keyless with Sigstore by
+this repository's `sign-release.yaml` workflow on the tag `<release>`. The signature proves the
+list, and the list proves each file. The identity is exact, so a `SHA256SUMS` signed for another tag
+does not pass. In the directory that holds the release files:
 
 ```sh
 release=<release>   # the release tag, for example 4.4.3-1
-for f in $(awk '{print $2}' SHA256SUMS) SHA256SUMS; do
-  cosign verify-blob --bundle "$f.sigstore.json" \
-    --certificate-identity "https://github.com/Senzing/sz-databricks/.github/workflows/sign-release.yaml@refs/tags/$release" \
-    --certificate-oidc-issuer https://token.actions.githubusercontent.com "$f"
-done
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity "https://github.com/Senzing/sz-databricks/.github/workflows/sign-release.yaml@refs/tags/$release" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
 sha256sum -c SHA256SUMS   # macOS: shasum -a 256 -c SHA256SUMS
 ```
 
-Every file must print `Verified OK`, then `OK`. The signatures are attached a few minutes after a
-release is published, `SHA256SUMS.sigstore.json` last: the release is complete once it is there.
+`cosign` must print `Verified OK`, then `sha256sum` prints `OK` for every file. The signature is
+attached a few minutes after a release is published: the release is complete once
+`SHA256SUMS.sigstore.json` is there.
 `scripts/verify-release.sh <download-dir> <release>` in the bundle does the same checks, and
 `scripts/install.sh` runs it first and stops when one fails.
 

@@ -10,6 +10,7 @@
     "hitlist",
     "Lakebase",
     "licence",
+    "lvdash",
     "Neue",
     "nohup",
     "vcpu",
@@ -21,7 +22,8 @@
     "sslmode",
     "sslrootcert",
     "TBLPROPERTIES",
-    "transactionid"
+    "transactionid",
+    "xlarge"
   ],
   "ignorePaths": [
     ".git/**",
