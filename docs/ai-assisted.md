@@ -79,9 +79,11 @@ Fill in the placeholders and paste:
 >    and `databricks current-user me -o json | jq -r '.userName, (.groups[]?.display)'`. If the CLI
 >    is older than 1.23.0, the version the bundle is validated with, stop and tell me. Ask me to
 >    confirm the workspace runs on AWS (the bundle's default node type, `r6g.xlarge`, is an AWS
->    type); if it does not, stop. If the groups do not include `admins`, stop: the install needs a
->    workspace admin. Ask me to confirm that I have MANAGE on `<catalog>` (or own it), and wait for
->    my answer. If any command fails, stop and show me the error.
+>    type); if it does not, stop. Run `databricks clusters list-zones -o json`: if it fails with
+>    `No such workerEnvironment 'serverless-…'`, stop and tell me the workspace runs serverless
+>    compute only, which the install cannot use (its jobs need classic compute). If the groups do
+>    not include `admins`, stop: the install needs a workspace admin. Ask me to confirm that I have
+>    MANAGE on `<catalog>` (or own it), and wait for my answer. If any command fails, stop and show me the error.
 > 2. **Download.** Create `<dir>` and download every file of the release into it:
 >    `gh release download <release> --repo Senzing/sz-databricks --dir <dir>`. If `gh` is missing
 >    or `gh auth status` fails, ask me to download every file of the release from
@@ -114,8 +116,11 @@ Fill in the placeholders and paste:
 >    install commands in steps 5 and 6, and do step 7.
 > 5. **Dry run.** In `<dir>/bundle` run
 >    `scripts/install.sh --target prod --release-dir <dir> --var catalog=<catalog> --var consumer_group=<group> --dry-run`
->    (leave out `--var consumer_group=<group>` if I named no group). Show me the steps it prints,
->    together with what they create and grant:
+>    (leave out `--var consumer_group=<group>` if I named no group). Run it on its own, not piped into
+>    another command, with `; echo "EXIT $?"` added, so its exit code is the last line. If that is
+>    not `EXIT 0`, or the line before it is not `Dry run: nothing changed.`, stop and show me the
+>    output: the install would fail (the troubleshooting page names each message). Show me the
+>    steps it prints, together with what they create and grant:
 >    - billable resources: the App `sz-databricks` (it bills all the time it runs, also between
 >      ingest runs), the jobs `sz-databricks-setup` and `sz-databricks-ingest` (their clusters bill
 >      while a run is active), the SQL warehouse `sz-databricks-warehouse` (2X-Small, stops after 5

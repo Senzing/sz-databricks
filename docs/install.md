@@ -39,18 +39,20 @@ scripts/install.sh --target prod --release-dir <download-dir> --var catalog=<cat
 
 `consumer_group` names the group that will query the results; leave it out and nobody but you and
 the service principals can read them ([who can read the results](use.md#who-can-read-the-results)).
-Read the script first: `--dry-run` prints every step and changes nothing.
+Read the script first: `--dry-run` runs the check and prints every step; it changes nothing. When
+the check stops it, it prints why and exits non-zero; otherwise its last line is `Dry run: nothing changed.`
 
 It runs these steps, each printed before it runs:
 
 | Step | What it does |
 |---|---|
 | 1 verify | `scripts/verify-release.sh <download-dir> <release>`: nothing runs from an unverified release |
+| check | `scripts/preflight.sh`, also in a dry run and when you resume: stops before anything is created when the workspace runs serverless compute only (the jobs need classic job clusters), or when you already have a deployment of this bundle and target in another catalog, App or Lakebase project ([one deployment per user](use.md#uninstall)). It reads that deployment from the workspace; step 4 trusts it, never a local cache |
 | 2 size | `scripts/node-sizing.sh <node_type_id> <executor_memory> <worker_task_slots>`: stops the install, printing the numbers, when one worker of the node type cannot hold that many engine threads at 1 GB each ([engine threads per worker](use.md#sizing)) |
 | 3 pre | `scripts/admin.sh pre`: creates the two schemas (`senzing_internal`, `senzing`) and the Volume, the `sz-databricks-app` group and the jobs' service principal (below) |
 | 4 bind | binds those schemas and the Volume to the bundle (`databricks bundle deployment bind`), so one deploy is enough |
 | 5 deploy | `databricks bundle deploy -t prod`: the App, the jobs, the Lakebase project, the secret scope, the SQL warehouse and the grants; the jobs' JAR goes to the Volume |
-| 6 post | `scripts/admin.sh post`: the App's service principal joins the `sz-databricks-app` group and gets CAN MANAGE on the App and USE CATALOG |
+| 6 post | `scripts/admin.sh post`: the App's service principal joins the `sz-databricks-app` group and gets CAN MANAGE on the App and USE CATALOG (it waits up to a minute for a group step 3 just created to show) |
 | 7 grant | only with `--var consumer_group=<group>`: `scripts/admin.sh consumer` gives that group USE CATALOG, and USE SCHEMA and SELECT on the results schema |
 | 8 start | `databricks bundle run sz_app -t prod`: starts the App |
 
@@ -61,8 +63,10 @@ resumes there (`--from <step>`).
 
 | Line | Meaning |
 |---|---|
+| `CHECK: <command>` | the check starts; `deployment=none` (a first install) or `deployment=<state>` and a `bound=<resource> <id>` line per resource the deployment manages follow |
 | `STEP <n> <name>: <command>` | step `<n>` starts and runs `<command>` |
 | `SKIP bind: <key> <id> already bound` | step 4 finds that schema or Volume bound already |
+| `removed the stale local state cache <path>` | the workspace has no deployment, so the CLI's local copy of an earlier one is removed (a dry run prints `would remove …`) |
 | `job_run_as=<application-id>` | step 3 printed the jobs' service principal |
 | `install.sh: step <name> failed; after fixing it, resume with: <command>` | the run stopped; fix the cause, then run `<command>` |
 | `Dry run: nothing changed.` | the `--dry-run` finished |

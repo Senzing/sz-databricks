@@ -107,7 +107,7 @@ it runs.
 
 | Need | Note |
 |---|---|
-| An AWS Databricks workspace | with Unity Catalog, classic compute for jobs (Graviton by default), Databricks Apps, Lakebase Autoscaling (AWS only today) and serverless SQL warehouses: the bundle always creates one, even when you name your own warehouse |
+| An AWS Databricks workspace | with Unity Catalog, classic compute for jobs (Graviton by default; a serverless-only workspace has none, and the install script stops on one), Databricks Apps, Lakebase Autoscaling (AWS only today) and serverless SQL warehouses: the bundle always creates one, even when you name your own warehouse |
 | A workspace admin with MANAGE on the catalog | runs the install; the deploying user needs no cluster rights. The install creates a workspace group (`sz-databricks-app`) and a service principal for the jobs (`sz-databricks-jobs`) |
 | Databricks CLI **1.23.0** or later, `jq` and `cosign` | on the machine you install from, with a CLI profile for the workspace. The bundle pins no CLI version and is validated with 1.23.0; check yours with `databricks -v`; `sha256sum` or `shasum` to verify the files |
 | Outbound access from the job clusters | to `github.com`, `release-assets.githubusercontent.com` and `objects.githubusercontent.com`, for the payload download only; or stage the payload in a Volume ([install](docs/install.md#1-choose-the-payload-source)) |
