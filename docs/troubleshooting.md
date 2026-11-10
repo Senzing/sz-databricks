@@ -28,8 +28,9 @@ These pages assume SENZING® entity resolution installed with the default names 
 | Symptom | Cause and fix |
 |---|---|
 | `install.sh: step <name> failed; after fixing it, resume with: …` | Fix what the step printed above it, then run the printed command: it resumes at that step. |
-| `verify-release.sh` prints `FAIL <file>: no <file>.sigstore.json` | The signature files are missing: download every `.sigstore.json` file of the release. They are attached a few minutes after a release is published, `SHA256SUMS.sigstore.json` last. |
-| `verify-release.sh` prints `FAIL <file>: …` with a cosign reason, or `sha256sum` reports `FAILED` | The file is not the one this release signed (another release's, or damaged): download it again from the same release, and pass that release (the tag without its `v`). Install nothing from it until every file passes. |
+| `verify-release.sh: <dir>/SHA256SUMS.sigstore.json missing` | The signature is missing: download `SHA256SUMS.sigstore.json` from the release, beside `SHA256SUMS`. It is attached a few minutes after a release is published. |
+| `verify-release.sh` prints `FAIL SHA256SUMS: …` with a cosign reason | `SHA256SUMS` is not the one this release signed (another release's, or damaged): download it and `SHA256SUMS.sigstore.json` again from the same release, and pass that release (the tag without its `v`). Install nothing until it passes. |
+| `sha256sum` reports `FAILED` or a file it cannot open | A file is damaged, from another release or not downloaded: download every file of the same release again. Install nothing from it until every file passes. |
 | `verify-release.sh: cosign is not installed` | Install [cosign](https://docs.sigstore.dev), then run the install again. |
 | `install.sh: release directory <dir> not found` | `--release-dir` must name the directory that holds the downloaded release files. |
 | `node-sizing.sh: worker_task_slots <n> is above the <m> engine threads one <node type> worker holds: …` | One worker of that node type cannot give each engine thread 1 GB beside the heap, the engine and the Databricks reserve; the message shows the numbers. Pass `--var worker_task_slots=<m>` or less, a smaller `executor_memory`, or a `node_type_id` with more memory, then resume with the command it prints ([Sizing](use.md#sizing)). |

@@ -2,13 +2,14 @@
 # check_release_assets.sh <dir> <release>: fail unless <dir> holds exactly the files of release <release>
 # (the tag, <senzing_version>-<build>), as release-assets.yaml names them. The private build runs it
 # before it publishes; the public signing workflow runs the same script (copied there by
-# scripts/sync_public.sh) before it signs, because it signs every file it finds. Checks:
-#   - the exact file set: the App binary, the engine JAR, one native archive per arch, the shared archive,
-#     the bundle tarball and SHA256SUMS; none empty or a link
+# scripts/sync_public.sh) before it signs SHA256SUMS, the one signature that covers every file. Checks:
+#   - the exact file set: one native archive per arch, the shared archive, the bundle tarball and
+#     SHA256SUMS; none empty or a link
 #   - SHA256SUMS lists exactly the others and verifies
-#   - the bundle tarball holds exactly bundle_members, its App binary and engine JAR are the loose ones
-#   - the engine JAR holds exactly jar_members under jar_dirs, and its release/payload-digests.txt lists the
-#     payload archives and the shared archive's payload manifest, each matching
+#   - the bundle tarball holds exactly bundle_members
+#   - the bundle's engine JAR (bundle_app_jar) holds exactly jar_members under jar_dirs, and its
+#     release/payload-digests.txt lists the payload archives and the shared archive's payload manifest,
+#     each matching
 #   - with RELEASE_REPO set, the JAR's release/release-repo.txt names that repository
 # RELEASE_ASSETS=<yaml> reads another manifest (default: release-assets.yaml beside this script's parent,
 # or public/release-assets.yaml in the private repository).
@@ -30,10 +31,9 @@ fail=0
 err() { echo "check_release_assets.sh: $*" >&2; fail=1; }
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 
-bin="$(ra release_app_binary)"; jar="$(ra release_app_jar)"; shared="$(ra release_shared_archive)"
-bundle="$(ra release_bundle_archive)"; sums="$(ra release_sums)"
+shared="$(ra release_shared_archive)"; bundle="$(ra release_bundle_archive)"; sums="$(ra release_sums)"
 archives=("$shared"); for a in $(ra release_archs); do archives+=("$(ra release_native_archive "$a")"); done
-deliverables=("$bin" "$jar" "${archives[@]}" "$bundle")
+deliverables=("${archives[@]}" "$bundle")
 
 # The exact set.
 actual="$(find "$dir" -mindepth 1 -maxdepth 1 -exec basename {} \; | LC_ALL=C sort)"
@@ -55,7 +55,8 @@ not exactly the release files"
   (cd "$dir" && "${sum[@]}" -c "$sums" >/dev/null 2>&1) || err "$sums does not verify"
 fi
 
-# The bundle tarball: exactly its members; its App binary and engine JAR are the loose ones.
+# The bundle tarball: exactly its members; its engine JAR is extracted for the checks below.
+jar="$(ra bundle_app_jar)"
 if [ -s "$dir/$bundle" ]; then
   if members="$(tar -tzf "$dir/$bundle" 2>/dev/null)"; then
     got="$(grep -v '/$' <<< "$members" | LC_ALL=C sort)"
@@ -64,22 +65,19 @@ if [ -s "$dir/$bundle" ]; then
 $got
 but must hold exactly
 $want"
-    same_as_loose() { # same_as_loose <manifest key of the member> <loose file>
-      local member; member="$(ra "$1")"
-      if grep -qxF "$member" <<< "$got" && [ -s "$dir/$2" ]; then
-        [ "$(tar -xzOf "$dir/$bundle" "$member" | digest)" = "$(digest < "$dir/$2")" ] || err "$bundle: $member is not $2"
-      fi
-    }
-    same_as_loose bundle_app_binary "$bin"
-    same_as_loose bundle_app_jar "$jar"
+    if grep -xF "$jar" <<< "$got" >/dev/null; then
+      tar -xzOf "$dir/$bundle" "$jar" > "$work/engine.jar" || err "$bundle: $jar cannot be extracted"
+    else
+      err "$bundle holds no $jar"
+    fi
   else
     err "$bundle is not a readable tar.gz"
   fi
 fi
 
 # The engine JAR: exactly jar_members under jar_dirs; the payload digests bind the archives.
-if [ -s "$dir/$jar" ]; then
-  if entries="$(unzip -Z1 "$dir/$jar" 2>/dev/null)"; then
+if [ -s "$work/engine.jar" ]; then
+  if entries="$(unzip -Z1 "$work/engine.jar" 2>/dev/null)"; then
     pat="^($(ra jar_dirs | tr ' ' '|'))/[^/]"
     got="$(grep -E "$pat" <<< "$entries" | grep -v '/$' | LC_ALL=C sort || true)"
     want="$(ra jar_members | lines)"
@@ -87,7 +85,7 @@ if [ -s "$dir/$jar" ]; then
 $got
 under $(ra jar_dirs), but must hold exactly
 $want"
-    unzip -p "$dir/$jar" release/payload-digests.txt > "$work/digests" 2>/dev/null || true
+    unzip -p "$work/engine.jar" release/payload-digests.txt > "$work/digests" 2>/dev/null || true
     pm="$(ra payload_manifest)"
     listed="$(awk '{ sub(/^\*/, "", $2); print $2 }' "$work/digests" | LC_ALL=C sort)"
     [ "$listed" = "$(printf '%s\n' "${archives[@]}" "$pm" | LC_ALL=C sort)" ] \
@@ -103,7 +101,7 @@ not the payload archives and $pm"
       [ "$(tar -xzOf "$dir/$shared" "$pm" 2>/dev/null | digest)" = "$want" ] || err "$shared: $pm does not match its digest in $jar"
     fi
     if [ -n "${RELEASE_REPO:-}" ]; then
-      [ "$(unzip -p "$dir/$jar" release/release-repo.txt 2>/dev/null)" = "$RELEASE_REPO" ] \
+      [ "$(unzip -p "$work/engine.jar" release/release-repo.txt 2>/dev/null)" = "$RELEASE_REPO" ] \
         || err "$jar release/release-repo.txt does not name $RELEASE_REPO"
     fi
   else

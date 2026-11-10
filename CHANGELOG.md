@@ -10,6 +10,15 @@ each Senzing version.
 
 ## [Unreleased]
 
+### Changed
+
+- A release is 6 files and carries one signature, `SHA256SUMS.sigstore.json`: `SHA256SUMS` is
+  signed and holds the SHA-256 of every file, so the per-file `.sigstore.json` files are gone.
+  Verify the signature, then `sha256sum -c SHA256SUMS`; `scripts/verify-release.sh` and the
+  install script do both. The App binary and the engine JAR ship only in the bundle tarball.
+
+## [4.4.3-1] - 2026-11-09
+
 ### Added
 
 - First release: Senzing entity resolution that runs entirely in your Databricks
