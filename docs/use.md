@@ -2,13 +2,51 @@
 
 # Use
 
-Day-to-day operation of an installed App: bringing data in, watching SENZING® entity resolution
-run and using the results. The App has five pages: **Setup**, **Sources**, **Files**, **Grants** and **Status**. Every
-action on them needs CAN MANAGE on the App (set on the App page with **Share**).
+Day-to-day operation of an installed sz-databricks: bringing data in, watching SENZING® entity
+resolution run and using the results. You operate it from the command line with one script,
+`sz.sh`, in the bundle directory the install script unpacked (`<dir>`, by default
+`./sz-databricks-<release>`). Below, `sz.sh` stands for `<dir>/scripts/sz.sh`.
 
-`<catalog>` below is the catalog you installed into. `senzing` is the mart schema: it holds the
-entity mart, the resolved entities as tables you query. `senzing_internal` is the internal schema.
-Both are the defaults; use your names if you changed them at install.
+`<catalog>` is the catalog you installed into. `senzing` is the mart schema: it holds the entity
+mart, the resolved entities as tables you query, and the `sz_health` view. `senzing_internal` is the
+internal schema. Both are the defaults; use your names if you changed them at install.
+
+## sz.sh
+
+| Operation | Does |
+|---|---|
+| `status` | the `sz_health` row and each code's fix; exit 0 only when `overall` is `OK` |
+| `wait [--timeout S]` | reads `sz_health` every 15 seconds until `resolve_state` reads `CAUGHT_UP` |
+| `register CODE …` | registers a source: a mapping view and its tables, or a Volume folder ([below](#register-a-source)) |
+| `unregister CODE`, `enable CODE`, `disable CODE` | removes a source's registration (its records stay), or turns its loading on or off |
+| `purge-source CODE --confirm CODE` | deletes a disabled source's records from Senzing and the mart, then its registration |
+| `reload CODE --confirm CODE` | reads the source again from the start |
+| `validate CODE [--sample N] [--repair]` | checks the view contract on a sample and compares the view's records with the mart's; `--repair` reloads when they differ |
+| `confirm-removal CODE --digest D` | releases a held mass removal of a files source |
+| `requeue-rejected [CODE]` | puts the records the engine rejected back for the next run |
+| `grants [CODE]` | the GRANT statements that let the jobs' principal read each source |
+| `run`, `pause`, `resume`, `stop` | starts an ingest run; pauses or resumes ingest; `stop` pauses and cancels the active runs |
+| `flush [--wait S]` | starts an ingest run now, then waits for `CAUGHT_UP` |
+| `accept-eula --yes` | accepts the Senzing EULA for this release |
+| `license --file F [--check]` | stores a new license (`--check` only checks it) |
+| `rotate-password` | a new engine Lakebase password |
+| `setup`, `check`, `upgrade` | the setup job's install, check and upgrade |
+| `prune` | deletes run bookkeeping and result files past their retention |
+| `logs RUN_ID` | a job run's state, its tasks and its result |
+| `uninstall …` | removes the install ([below](#uninstall)) |
+
+Each operation runs as a job of the install (the operations job `sz-databricks-ops`, about a minute
+on serverless compute, or the setup job) or reads `sz_health`, and prints one JSON object:
+`status`, `code`, `message`, `fix`, `next` (what to run next), `run_id`, `run_url`, `details`,
+`warnings` and `statements` (SQL for you to run, such as GRANTs). The exit status is 0 when it
+succeeded, 1 when it failed (its code and fix printed) and 2 for bad usage or an operation refused
+before anything ran (a missing `--confirm` or `--yes`). `--dry-run` before the operation prints each
+command, job parameter and statement and runs nothing. A user of the `--operator-group` can run every
+operation but `license`, `rotate-password` and `uninstall`, which need the installer's rights.
+
+**In the Jobs UI instead.** Every operation is a run of `sz-databricks-ops` with job parameters (`op`
+and its own, such as `code` and `view`): **Run now with different parameters** on that job does the
+same, and `sz.sh --dry-run <operation>` prints the exact parameters. The result is the run's output.
 
 ## Prepare a source
 
@@ -18,10 +56,8 @@ Feed).
 
 ### Change Data Feed and grants
 
-The ingest job reads each base table's changes through Delta Change Data Feed. `<principal>` below
-is each of the App's service principal (registration checks the source as it) and the jobs' service
-principal (`sz-databricks-jobs` unless you gave `job_run_as`), which loads it. Who can run each
-statement:
+The ingest job reads each base table's changes through Delta Change Data Feed, as the jobs' service
+principal (`sz-databricks-jobs` unless you gave `--job-run-as`). Who can run each statement:
 
 - **The table owner**, for each base table a source reads:
 
@@ -33,30 +69,30 @@ statement:
   ```
 
 - **The catalog owner, or a user with MANAGE on the catalog**, only when the tables are in a catalog
-  other than the one you installed into (the install already granted USE CATALOG on that one to
-  both principals):
+  other than the one you installed into (the install already granted USE CATALOG on that one):
 
   ```sql
-  GRANT USE CATALOG ON CATALOG <catalog> TO `<principal>`;
+  GRANT USE CATALOG ON CATALOG <catalog> TO `<jobs principal application id>`;
   ```
 
 - **The owner of the schema, table and view, or a user with MANAGE on them:**
 
   ```sql
-  GRANT USE SCHEMA ON SCHEMA <catalog>.<schema> TO `<principal>`;
-  GRANT SELECT ON TABLE <catalog>.<schema>.<table> TO `<principal>`;
-  GRANT SELECT ON VIEW <catalog>.<schema>.<mapping_view> TO `<principal>`;
+  GRANT USE SCHEMA ON SCHEMA <catalog>.<schema> TO `<jobs principal application id>`;
+  GRANT SELECT ON TABLE <catalog>.<schema>.<table> TO `<jobs principal application id>`;
+  GRANT SELECT ON VIEW <catalog>.<schema>.<mapping_view> TO `<jobs principal application id>`;
   ```
 
-A longer retention keeps more history, and so more storage, and gives you more time to recover from
-a stopped source before its changes expire ([retention warnings](#retention-warnings-and-reload)).
-
+`sz.sh register` checks each and prints the exact statements it is missing, with the principal's
+application id filled in. A longer retention keeps more history, and so more storage, and gives you
+more time to recover from a stopped source before its changes expire
+([retention warnings](#retention-warnings-and-reload)).
 
 ### Write a mapping view
 
 One row per Senzing record, with exactly these columns:
 
-- `DATA_SOURCE`: a constant per source, such as `'CUSTOMERS'`.
+- `DATA_SOURCE`: a constant per source, the source's code, such as `'CUSTOMERS'`.
 - `RECORD_ID`: the record key, trimmed exactly so: `trim(BOTH ' \t\r\n' FROM <key>)`. The ingest
   job matches changed rows to the view with the same expression.
 - `RECORD_JSON`: the Senzing JSON of the record, its attributes as the
@@ -130,40 +166,66 @@ The two numbers must be equal.
 
 ## Register a source
 
-On **Sources**, under **Register a source**, the **Add source** box takes a mapping view or table
-(`<catalog>.<schema>.<name>`), or a folder (`/Volumes/…`, a files source). Give the source name and
-its Senzing data source code (the `DATA_SOURCE` value of the view); for a mapping view, its base tables with their key columns. A table that
-itself holds `DATA_SOURCE`, `RECORD_ID` and `RECORD_JSON`, given no base tables, is its own base
-table, keyed by `RECORD_ID`.
+```sh
+sz.sh register CUSTOMERS --view <catalog>.<schema>.customer_mapped \
+  --table <catalog>.<schema>.customer=customer_id --table <catalog>.<schema>.customer_phone=customer_id
+```
 
-Registration answers at once. The source shows *checking* while the App checks, in the background,
-Change Data Feed, the grants and the view's columns on a sample of 1,000 rows. A passed check enables
-the source (it shows *enabled*, with any retention advice under *Recommended*) and
-starts its first load: the run adds the data source to the Senzing configuration itself, so the first load costs one cluster start. A source
-registered while a run is active loads in the next run. There is no limit on how many tables are
-watched.
+`CODE` is the Senzing data source code, the view's `DATA_SOURCE`; the source's name is the code in
+lower case with `-` as `_`. Name every base table the view reads that holds the record id: `--table
+T=COL` gives one table its own record id column (a child table's foreign key), and `--key COL` the
+others' (default `RECORD_ID`). A table that itself holds `DATA_SOURCE`, `RECORD_ID` and
+`RECORD_JSON` can be registered alone with `--table`, as its own view. The install script's
+`--source` runs the same registration ([install](install.md#sources-at-install)).
+
+Registration checks, as the jobs' principal, that it can read each table and the view, that Change
+Data Feed is on and that 1,000 sample rows of the view keep the contract above. It refuses with the
+code and the statements to run (`SOURCE_NO_ACCESS`, `SOURCE_CDF_OFF`, `SOURCE_VIEW_CONTRACT`), and
+advises a 30-day retention in `warnings`. A registered source is enabled and its first load starts:
+the run adds the data source to the Senzing configuration itself. A source registered while a run
+is active loads in the next run. There is no limit on how many tables are watched.
 
 A base table with no Delta version in Unity Catalog (a streaming table or materialized view) is
-refused: register the Delta table it reads. A source the jobs' principal cannot read would never
-update, so its registration is refused with the GRANT statements to run.
+refused: register the Delta table it reads.
+
+### Tables shared across sources
+
+Name with `--table` every table whose change should re-resolve the source's records. A table the
+view only looks up, one that holds no record id (another system's accounts table that a contacts
+view reads), is named with `--via L.KEY:T.VKEY.RID` instead (repeatable): a changed row of `L`,
+before and after the change, re-resolves the records of base table `T` (one of the `--table`
+tables) whose `VKEY` equals its `KEY`; `RID` is `T`'s record id column.
+
+```sh
+sz.sh register CONTACTS --view <catalog>.<schema>.contact_mapped \
+  --table <catalog>.<schema>.contacts=contact_id \
+  --via <catalog>.<schema>.accounts.account_id:<catalog>.<schema>.contacts.account_id.contact_id
+```
+
+The install script's `--source-via` runs the same ([install](install.md#sources-at-install)).
 
 ### A files source
 
-A source can be a folder in a Volume instead of tables: give the folder
-(`/Volumes/<catalog>/<schema>/<volume>/<folder>`) and the format `jsonl`, one Senzing JSON record per
-line with `RECORD_ID`. A line without `DATA_SOURCE` gets the registered one; blank lines are
-skipped. Grant both principals READ VOLUME on the volume, plus USE CATALOG and USE SCHEMA.
-Registration checks that the folder exists, that the App can list it and the format.
+A source can be a folder in a Volume instead of tables:
+
+```sh
+sz.sh register PPP_LOANS --path /Volumes/<catalog>/<schema>/<volume>/<folder> [--format jsonl] [--on-remove mirror|keep]
+```
+
+The format `jsonl` is one Senzing JSON record per line with `RECORD_ID`. A line without
+`DATA_SOURCE` gets the registered code; blank lines are skipped. Grant the jobs' principal READ
+VOLUME on the volume, plus USE CATALOG and USE SCHEMA. Registration checks that the folder exists,
+that the jobs' principal can list it and the format.
 
 **How files load.** The folder is walked recursively. A file's version is its path, size and
-modification time. A new or changed file (overwritten, appended to) is read again whole, and only the
-records that changed reach the engine; a record the new version no longer holds is deleted. A record
-in a later file replaces an earlier one with the same `RECORD_ID`.
+modification time. A new or changed file (overwritten, appended to) is read again whole, and only
+the records that changed reach the engine; a record the new version no longer holds is deleted. A
+record in a later file replaces an earlier one with the same `RECORD_ID`.
 
 - **Latency.** A file is taken once two listings in a row see the same version. While a run is
   active the engine lists the folder every 15 seconds, so a dropped file reaches the mart within one
-  or two polls plus the load itself. With no run active, the App checks every 60 seconds and starts
-  one: add the cluster start.
+  or two polls plus the load itself. With no run active, the watcher lists it every 5 minutes and
+  starts one: add the cluster start.
 - **Modification times have 1-second precision.** A file rewritten at the same size within the same
   second as the version already listed looks unchanged and is not read again: write it under a new
   name, or wait a second.
@@ -171,7 +233,7 @@ in a later file replaces an earlier one with the same `RECORD_ID`.
   or `.crc`. Drop each file whole: write it elsewhere and move it in, or give it a skipped name until
   it is complete. A link or a path leaving the folder is refused.
 
-**When a file is removed** (chosen at registration, shown on **Sources**):
+**When a file is removed** (`--on-remove`):
 
 - `mirror` (the default): the folder is the source of truth. Removing a file deletes the records only
   it supplied (a record another file still holds stays). **Do not move or archive files out of the
@@ -181,96 +243,119 @@ in a later file replaces an earlier one with the same `RECORD_ID`.
 
 A removal counts once two listings in a row miss the file; a missing or unreadable folder never
 counts (it fails the source instead). Deletes run through the engine like adds: removing a file takes
-about as long as loading it did. If a removal would delete more than half the folder's files (with at
-least 3 held) or records, or every file, it is **held**: new files and changes that drop nothing
-still load, **Sources** shows how many files and records it would delete, and putting the files back
-releases it. A user with CAN MANAGE confirms that exact set with **Confirm removal**.
+about as long as loading it did. If a removal would delete more than half the folder's files (with
+at least 3 held) or records, or every file, it is **held**: new files and changes that drop nothing
+still load, `sz_health` reports `FILES_HELD`, and putting the files back releases it. To confirm
+that exact set, read the hold's digest and pass it:
 
-**Files** shows each file of a files source: PENDING (seen, not loaded yet), INGESTED, FAILED (with
-why), REMOVED or HELD, with its size and time. It also counts the files in each state. It lists at most 1,000 files,
-those not INGESTED first. For every loaded file query `<catalog>.senzing_internal._files_<source>_ledger_v`
-(file, version, record count, last load); `<catalog>.senzing_internal._file_events` records each time
-a file failed, was held or was removed. Viewing **Files** reads the Volume only, so it never starts
-the SQL warehouse.
+```sql
+SELECT value FROM <catalog>.senzing_internal.sz_app_state WHERE key = 'files.hold.<source>';
+```
 
-### The Grants page
+```sh
+sz.sh confirm-removal <CODE> --digest <digest>
+```
 
-**Grants** lists, per registered source and per principal (the App's service principal and the
-principal the ingest job runs as), each privilege needed: USE CATALOG, USE SCHEMA, then SELECT on each
-base table and the view, or READ VOLUME for a files source. It shows whether Unity Catalog effective
-permissions hold it (a group's grant counts) and the GRANT statement to run. An answer it cannot read
-shows "cannot verify", never granted. Answers are cached for 5 minutes; **Check again** reads them
-again. The App never runs a GRANT itself.
+If the set changed meanwhile, it refuses with `HOLD_CHANGED`: read the digest again.
+
+For every loaded file query `<catalog>.senzing_internal._files_<source>_ledger_v` (file, version,
+record count, last load); `<catalog>.senzing_internal._file_events` records each time a file failed,
+was held or was removed.
+
+### Change or remove a source
+
+- `sz.sh disable <CODE>` stops loading it; `enable` starts again from where it stopped.
+- `sz.sh unregister <CODE>` removes the registration; its records stay in Senzing and the mart.
+- `sz.sh purge-source <CODE> --confirm <CODE>` (the source disabled first) deletes its records from
+  Senzing and the mart, then its registration. `sz_health` shows `purges_running` meanwhile.
+- `sz.sh validate <CODE>` checks the view contract on a sample and compares the view's record count
+  with the mart's; `--repair` reloads the source when they differ.
+
+## Watch it resolve
+
+```sh
+sz.sh wait --timeout 1800
+```
+
+`wait` reads `sz_health` every 15 seconds, prints `resolve_state` and ends with one line:
+`resolve wait: <outcome> after <n> s; <records> records, <entities> entities; sz_health.overall = <overall>; exit <code>`.
+It exits 0 at `CAUGHT_UP`, 1 at `SOURCES_FAILED` or when the timeout passes (`WAIT_TIMEOUT`).
+
+| `resolve_state` | Means |
+|---|---|
+| `NO_SOURCES` | nothing registered yet |
+| `SOURCES_FAILED` | a source failed: `source_errors` says why and how to fix it |
+| `WAITING_FOR_CAPTURE` | a source has changes not yet read, a reload is pending or the watcher has a run to start |
+| `RESOLVING` | a run is loading records, or the mart is catching up |
+| `CAUGHT_UP` | every change is resolved and in the mart |
+
+### sz_health
+
+`sz.sh status` prints the one row of `<catalog>.senzing.sz_health` and each code's fix:
+
+```sql
+SELECT overall, resolve_state, fail_codes, warn_codes FROM <catalog>.senzing.sz_health;
+```
+
+`overall` is `OK`, `WARN` or `FAIL`; `fail_codes` lists the codes that make it `FAIL`, `warn_codes`
+the rest, and `warnings` both. Each code's meaning and fix is in
+[troubleshooting](troubleshooting.md#sz_health-and-script-codes). The other columns:
+
+| Columns | Hold |
+|---|---|
+| `setup_status`, `setup_phase`, `setup_running_secs`, `setup_error`, `last_setup_warnings` | the latest setup run |
+| `setup_release`, `bundle_release`, `senzing_version` | the release setup installed, the release deployed and its Senzing SDK version |
+| `eula_version`, `eula_accepted_at`, `eula_accepted_by` | the EULA acceptance |
+| `license_expires`, `license_days_left`, `license_record_limit`, `license_records_used` | the running license; it warns 30 days before it expires and at 90% of its record limit |
+| `entity_count`, `source_count`, `sources_enabled`, `sources_failed`, `source_errors` | the mart and the sources |
+| `last_run_id`, `last_run_state`, `last_run_ended_at`, `last_run_error`, `loop_running`, `affected_pending`, `paused` | ingest |
+| `rejected_keys`, `mart_quarantine`, `files_held`, `purges_running`, `purges_failed`, `purges` | work that needs a look |
+| `watch_error`, `watch_pending`, `checked_at` | the watcher's last error, the runs it has pending, and when the row was read |
+
+### The dashboard
+
+The `sz-databricks status` AI/BI dashboard (workspace **Dashboards**) shows `sz_health`, the ingest
+runs, the engine loop's health over the last 24 hours, quarantined records, each source's position
+and the entity mart's counts. It runs on the bundle's SQL warehouse and reads with each viewer's own
+access: you need SELECT on both schemas; the consumer group sees the mart's parts. Its `mart_schema`
+parameter names the mart schema (default `senzing`).
+
+### The health alert
+
+The SQL alert `sz-databricks health` reads `sz_health` hourly (`--set alert_cron=…`, Quartz) and
+triggers when `overall` is not `OK`; it notifies again when it is back to `OK`. It mails the
+addresses you gave the install with `--alert-email`, which also get each failed job run. Without one
+it mails nobody and shows its state in the workspace's **Alerts**. To change the addresses, run the
+install script again with the new `--alert-email` options.
 
 ## Run, pause and resume
 
-The ingest job runs when a registered table or folder changes, or when you click **Start a run** on
-**Status**. Each run is one engine loop: it ingests every new commit, processes
-redo (work the engine queues when a change to one entity means related entities must be evaluated
-again) and refreshes the mart for the entities that changed, then polls the sources again every 15 seconds. After 10
-minutes with no new commit and no redo it ends and the cluster stops; a busy run ends after 6 hours
-and the next change starts a fresh one. Commits that land while a run is active are ingested by that
-run. One run at a time.
+The ingest job runs when a registered table or folder changes, or when you run `sz.sh run` (start a
+run) or `sz.sh flush` (start one and wait for `CAUGHT_UP`). Each run is one engine loop: it ingests
+every new commit, processes redo (work the engine queues when a change to one entity means related
+entities must be evaluated again) and refreshes the mart for the entities that changed, then polls
+the sources again every 15 seconds. After 10 minutes with no new commit and no redo it ends and the
+cluster stops; a busy run ends after 6 hours and the next change starts a fresh one. Commits that
+land while a run is active are ingested by that run. One run at a time.
 
-The watcher job (`sz-databricks-watch`, serverless) watches for changes, so the App need not run. Every
-5 minutes (the bundle variable `watch_cron`) it reads each registered base table's latest Delta commit
-version from Unity Catalog's table metadata and lists each files source's folder, which starts no
-warehouse or cluster. When a version or a folder moved, it starts the job, unless ingest is paused, a
-run is running or queued, or a setup run is active. Any commit counts, even one that changes no rows. A
-watcher run waits a few minutes for its serverless compute before it reads anything, so a change starts
-a run up to about 10 minutes after it lands. **Status** shows the watcher's last run and what it found.
+The watcher job (`sz-databricks-watch`, serverless) watches for changes. Every 5 minutes (the bundle
+variable `watch_cron`) it reads each registered base table's latest Delta commit version from Unity
+Catalog's table metadata and lists each files source's folder, which starts no warehouse or cluster.
+When a version or a folder moved, it starts the job, unless ingest is paused, a run is running or
+queued, a setup run is active or the deployed release still needs `sz.sh upgrade`. Any commit counts,
+even one that changes no rows. A watcher run waits a few minutes for its serverless compute before it
+reads anything, so a change starts a run up to about 10 minutes after it lands.
 
-**Pause** stops new work: the App starts no run, and a run in progress stops cleanly. The engine
-reads the pause at its next poll, takes no new work, lets the chunks in flight commit and ends
-`paused`. **Status** shows "pausing…", then `paused`. Pause also starts a watcher run, which cancels the
-ingest run only as a fallback, when it has not stopped 30 seconds after the engine saw the pause; with
-the watcher's start-up (and its next scheduled run, when one was already running) that fallback lands
-within about 10 minutes. Every position is durable when its step commits, so the next
-run resumes from them; at most one chunk per engine slot (500 records) is applied again, each as a
-replace, so nothing is doubled. Changes made while paused wait in the Change Data Feed (or the
-folder). **Resume** clears the pause and starts a run.
+`sz.sh pause` stops new work: no run starts, and a run in progress stops cleanly. The engine reads
+the pause at its next poll, takes no new work, lets the chunks in flight commit and ends `paused`.
+The watcher cancels the run only as a fallback, when it has not stopped 30 seconds after the engine
+saw the pause. Every position is durable when its step commits, so the next run resumes from them;
+at most one chunk per engine slot (500 records) is applied again, each as a replace, so nothing is
+doubled. Changes made while paused wait in the Change Data Feed (or the folder). `sz.sh resume`
+clears the pause and starts a run. `sz.sh stop` pauses and cancels the active runs at once.
 
-Between runs nothing is left running but the watcher's short scheduled runs and the App while you use
-it: the job cluster stops, Lakebase scales to zero after 30 idle minutes and the SQL warehouse after 5.
-
-### The App stops itself when idle
-
-The App's compute bills while it runs (**Status** shows its DBUs per hour, next to **Keep running**).
-After 30 minutes without a page view or action it stops itself; the watcher stops it too if it missed
-that. Ingest does not need it: the watcher starts runs, follows pauses and upgrades with the App
-stopped. Opening the App's URL does not start it: click **Start** on the App in the workspace's
-**Apps** page. Turn on **Keep running** on **Status** to keep it up; it then bills until you turn that
-off or stop it. To watch ingest without starting the App, open the `sz-databricks status` dashboard
-(workspace **Dashboards**): runs, engine health, quarantined records, each source's position and the
-mart's counts. It reads with your own access, so you need SELECT on both schemas. Its `mart_schema`
-parameter names the mart schema (default `senzing`); set it there if you installed another.
-
-### Bottlenecks on the Status page
-
-**Bottlenecks (last hour)** charts what the engine samples about every 15 seconds while a run works,
-over the latest run's last hour. Each chart's legend shows the newest value; hover over a sample for
-all of its values. `n/a` means the engine could not read that signal, never zero; a break in a line
-is a gap between samples or an unknown value.
-
-- **Cluster.** Engine slots in use, stacked by kind (ingest, redo, mart), against the dashed total;
-  records per second; the backlog (rows staged and not yet ingested, entity ids waiting for the
-  mart, the redo queue); the latest active and pending tasks and executors.
-- **Lakebase.** The engine role's sessions (active, idle); connections used against the dashed
-  limit; waiting sessions by wait event (the five with the most sessions, the rest as `other`); and
-  the latest sample's top statements by total time.
-
-How to read the waits is in [troubleshooting](troubleshooting.md#reading-the-lakebase-waits).
-
-## Retention warnings and reload
-
-Each source's position is a Delta version. If it falls behind the table's retained change data, the
-App warns before the gap. If the gap is reached, the source stops with a named error and **Reload
-source** on **Sources** rebuilds it:
-
-1. a full read of the view;
-2. then a reconcile that deletes the Senzing records no longer in it.
-
-Change data is never skipped silently.
+Between runs nothing is left running but the watcher's short scheduled runs: the job cluster stops,
+Lakebase scales to zero after 30 idle minutes and the SQL warehouse after 5.
 
 ## Use the results
 
@@ -280,8 +365,8 @@ batch commits. Under a large load the mart trails ingest by minutes, and the run
 has caught up.
 
 The mart is an entity map: which entity each source record resolves to and why, and which entities
-relate. It does not copy your data: everything else about a record is in your source table, joined on
-`(data_source, record_id)`.
+relate. It does not copy your data: everything else about a record is in your source table, joined
+on `(data_source, record_id)`.
 
 | Table | One row per | Columns |
 |---|---|---|
@@ -343,11 +428,20 @@ FROM <catalog>.senzing.entity_record
 WHERE updated_at > current_timestamp() - INTERVAL 1 DAY;
 ```
 
+### The demo notebook
+
+The deploy puts a SQL notebook, `sz_quickstart`, in your workspace at
+`/Workspace/Users/<you>/.bundle/sz-databricks/prod/files/notebooks/sz_quickstart`. It tours the
+results: `sz_health`, entities and records per data source, the largest entities, cross-source
+entities and relationships. Attach it to the `sz-databricks-warehouse` SQL warehouse and fill in its
+two widgets, `catalog` and `mart_schema` (`senzing` unless you changed it). It changes nothing.
+
 ### Who can read the results
 
-Install with `--var consumer_group=<group>` and the install script grants that group USE CATALOG on
-the catalog and USE SCHEMA and SELECT on the mart schema, on every run. There is no grant by default,
-and never to `account users` unless you name it. Or run the two statements the install script prints:
+Install with `--consumer-group <group>` and the install grants that group USE CATALOG on the catalog,
+USE SCHEMA and SELECT on the mart schema, CAN USE on the warehouse and CAN READ on the dashboard.
+There is no grant by default, and never to `account users` unless you name it. To grant another
+group by hand:
 
 ```sql
 GRANT USE CATALOG ON CATALOG <catalog> TO `<group>`;
@@ -355,8 +449,8 @@ GRANT USE SCHEMA, SELECT ON SCHEMA <catalog>.senzing TO `<group>`;
 ```
 
 The mart's bookkeeping is in the internal schema, so that grant does not reach it: `_sync_state`,
-`_quarantine` (entities the mart could not read, with the error) and `_ingest_quarantine`, the records
-the engine rejected, one row each:
+`_quarantine` (entities the mart could not read, with the error) and `_ingest_quarantine`, the
+records the engine rejected, one row each:
 
 | Column | Holds |
 |---|---|
@@ -365,10 +459,24 @@ the engine rejected, one row each:
 | `payload` | the record as the job had it, or empty: it can hold the record's contents, so treat it like the source |
 | `quarantined_at` | when |
 
+A rejected record does not stop the run; `sz_health` reports `REJECTED_KEYS`. Fix the records at the
+source, then `sz.sh requeue-rejected [CODE]` puts them back for the next run.
+
+## Retention warnings and reload
+
+Each source's position is a Delta version. If it falls behind the table's retained change data, the
+source fails with a named error (`SOURCES_FAILED`, `source_errors` says why) and
+`sz.sh reload <CODE> --confirm <CODE>` rebuilds it:
+
+1. a full read of the view;
+2. then a reconcile that deletes the Senzing records no longer in it.
+
+Change data is never skipped silently.
+
 ## Sizing
 
 Sizes are bundle variables. To change one, run the install script again with the new value and every
-`--var` you installed with, for example `--var autoscale_max=4`; it redeploys and changes only what
+option you installed with, for example `--set autoscale_max=4`; it redeploys and changes only what
 differs. The defaults:
 
 | Variable | Default | Meaning |
@@ -383,96 +491,115 @@ differs. The defaults:
 | `spark_version` | `17.3.x-scala2.13` | Databricks Runtime 17.3 LTS (Spark 4.0, Scala 2.13) |
 | `data_security_mode` | `SINGLE_USER` | the access mode the UI calls **Dedicated**, here to the jobs' service principal (`USER_ISOLATION`, the UI's **Standard**, also needs the Volume's `lib/` on the metastore allowlist) |
 | `setup_timeout_seconds`, `ingest_timeout_seconds` | `3600`, `28800` | the longest a run may take before it is stopped (and stops billing); the ingest bound sits above a run's 6-hour limit, so it stops only a hung run |
-| `lakebase_min_cu`, `lakebase_max_cu` | `4`, `4` | the Lakebase endpoint's autoscaling range, in compute units (about 2 GB each, so 8 GB by default) |
-| `lakebase_vcpu` | `2` | the Lakebase size in vCPU the engine's concurrency is computed from (12 engine threads per vCPU); the Setup page starts with it |
+| `lakebase_min_cu`, `lakebase_max_cu` | `4`, `4` | the Lakebase endpoint's autoscaling range, in compute units (about 2 GB each, so 8 GB by default); the install refuses less than 4 |
+| `lakebase_vcpu` (`--lakebase-vcpu`) | `2` | the Lakebase size in vCPU the engine's concurrency is computed from (12 engine threads per vCPU) |
 | `lakebase_suspend` | `1800s` | idle time before Lakebase scales to zero (60 seconds to 7 days; 30 minutes by default) |
-| `warehouse_size`, `warehouse_auto_stop_mins` | `2X-Small`, `5` | the SQL warehouse the bundle creates for the App |
+| `warehouse_size`, `warehouse_auto_stop_mins` | `2X-Small`, `5` | the SQL warehouse the bundle creates |
 | `pg_sslmode`, `pg_sslrootcert` | `verify-full`, `/etc/ssl/certs/ca-certificates.crt` | the engine's Lakebase TLS |
 
-**Engine threads per worker.** Each ingest worker runs one engine, whose memory is outside the JVM heap:
-4 GB for the engine plus 1 GB per engine thread. A worker holds at most
+**Engine threads per worker.** Each ingest worker runs one engine, whose memory is outside the JVM
+heap: 4 GB for the engine plus 1 GB per engine thread. A worker holds at most
 
-    min(cores x 6, floor((node memory - executor_memory - 4 GB - Databricks reserve) / 1 GB))
+```text
+min(cores x 6, floor((node memory - executor_memory - 4 GB - Databricks reserve) / 1 GB))
+```
 
-engine threads, where the Databricks reserve, the memory Databricks keeps for the node's own services, is
-3% of the node plus 4800 MB. The default `r6g.xlarge` (32 GB) beside the `4g` heap holds 18 (its 4 cores
-would allow 24); an `r6g.2xlarge` (64 GB) holds 48 beside `4g` and 45 beside `8g`; an `r6g.large` (16 GB)
-holds 2. The rule's numbers are in `scripts/node-sizing.yaml`. Step 2 of the install script,
-`scripts/node-sizing.sh <node_type_id> <executor_memory> <worker_task_slots>`, reads the node type's cores
-and memory from `databricks clusters list-node-types` and stops the install before anything changes when
-`worker_task_slots` is above that count, printing the numbers; it never lowers the value for you. Run it
-yourself before a deploy without the install script.
+engine threads, where the Databricks reserve, the memory Databricks keeps for the node's own
+services, is 3% of the node plus 4800 MB. The default `r6g.xlarge` (32 GB) beside the `4g` heap holds
+18 (its 4 cores would allow 24); an `r6g.2xlarge` (64 GB) holds 48 beside `4g` and 45 beside `8g`; an
+`r6g.large` (16 GB) holds 2. The rule's numbers are in `scripts/node-sizing.yaml` in the bundle. Step
+P3 of the install script, `scripts/node-sizing.sh <node_type_id> <executor_memory> <worker_task_slots>`,
+reads the node type's cores and memory from `databricks clusters list-node-types` and stops the
+install before anything changes when `worker_task_slots` is above that count, printing the numbers
+(`NODE_SIZING`); it never lowers the value for you.
 
 The setup job runs on a single-node cluster of the same node type, which needs capacity in your
-region. The engine's concurrency is bounded by the Lakebase vCPU and by `cluster_slots`. To size Lakebase
-up, raise `lakebase_min_cu`, `lakebase_max_cu` and `lakebase_vcpu` together, in the default's
-proportion (2 vCPU per 4 compute units). You can also correct the vCPU on the Setup page and click
-**Save**. The
-Setup page shows the resulting limit and whether threads or connections set it.
+region. The engine's concurrency is bounded by the Lakebase vCPU and by `cluster_slots`; a run that
+needs more Lakebase connections than the database allows warns `CONNECTION_BUDGET`. To size Lakebase
+up, raise `lakebase_min_cu`, `lakebase_max_cu` and `--lakebase-vcpu` together, in the default's
+proportion (2 vCPU per 4 compute units).
+
+## License and password
+
+- `sz.sh license --file <path>` checks a license file (not empty, base64, a multiple of 4 characters,
+  at most 64 KB; its value is never printed), stores it in the secret scope and has the engine read
+  it: its expiry and record limit go to `sz_health`. `--check` has the engine read it from a scratch
+  key, deleted after, and stores nothing. `sz_health` warns 30 days before a license expires
+  (`LICENSE_EXPIRING`) and at 90% of its record limit (`LICENSE_NEAR_LIMIT`).
+- `sz.sh rotate-password` generates a new password for the engine's Lakebase role, stores it and runs
+  setup, which sets it. Run it when no ingest run is active.
 
 ## Upgrade
 
-Download and verify the new release, then run its install script with the same `--var`s. The
-deploy replaces the watcher too, and its next run sees that setup installed an older release: Setup and
-Status show "Upgrade required", and no run starts. The watcher then upgrades by itself, once per
-release and with the App stopped: it pauses ingest, waits until no run is active, runs setup Upgrade
-(stages the new release's engine payload, the Senzing runtime the jobs run, and updates the tables) and
-resumes if it paused. Setup Upgrade needs the engine's Lakebase password in the secret scope, which
-Install stores; when it is missing the watcher starts nothing and **Status** names the fix: click
-**Upgrade** on the Setup page.
+Download and verify the new release ([README](../README.md#verify)), then run its install script
+with `--upgrade` and the same `--catalog` and options you installed with:
 
-If that Upgrade fails it is not tried again and ingest stays paused: fix the cause and click
-**Upgrade** on the Setup page (the pause then clears). An App older than the installed release refuses
-Install and Upgrade and never downgrades: deploy that release or newer. Older releases' payloads stay
-under `engine/<release>/` in the Volume (about 1.3 GB each); delete them by hand once you will not
-roll back.
+```sh
+./sz-databricks-install-<new release>.sh <new release> --catalog <catalog> --upgrade [--accept-eula] [your other options]
+```
+
+It verifies and unpacks the new release into its own `--dir`, deploys it (the jobs, the watcher and
+the dashboard), then runs setup's upgrade: it stages the new release's engine payload and updates
+the tables. A release that carries a new EULA version needs `--accept-eula` again. Until the upgrade
+runs, `sz_health` reports `UPGRADE_PENDING` and no ingest run starts; the watcher never upgrades by
+itself. `sz.sh upgrade` runs setup's upgrade alone, for a deploy whose upgrade failed. An install
+never downgrades: setup refuses a release older than the one it installed (`DOWNGRADE`). Operate
+the install with the new release's `sz.sh` from then on.
+
+Older releases' payloads stay under `engine/<release>/` in the Volume (about 1.3 GB each); delete them
+by hand once you will not roll back.
 
 ## Uninstall
 
-On **Setup**, in **Uninstall**, type `uninstall` to confirm. The App pauses ingest and cancels the
-jobs' active runs. If an install failed before it created the App, there is no Setup page and
-nothing runs yet: skip this and destroy the bundle (below).
-
-Your data is kept unless you also tick **Also delete data** and type `delete data`. Data means:
-
-- the App's tables in both schemas (registry, status, quarantine and the entity mart) and the
-  Volume's working data (checkpoints, feed, staging): a setup run deletes them as the jobs' service
-  principal (which owns them); its result is in the setup job's runs;
-- the license and engine password secrets, which the App deletes.
-
-The staged payload and the jobs' JAR stay until you destroy the bundle. From the bundle directory:
-
 ```sh
-databricks bundle destroy -t prod --var catalog=<catalog> --var job_run_as=<jobs-sp-application-id> --auto-approve
+sz.sh uninstall --confirm "delete data"           # everything goes
+sz.sh uninstall --confirm uninstall --keep-data   # the tables and the Volume stay
 ```
 
-Add any other `--var` you installed with. `--auto-approve` confirms the deletions; without it the
-command asks, and fails when nothing can answer (a script or an assistant runs it). It removes
-everything the bundle created, the App, both jobs, the schemas and Volume (with the staged payload),
-the secret scope and the Lakebase project (with the Senzing repository).
+It prints each step as `==> U<n> …`:
 
-Two things the install script created outside the bundle remain:
+| Step | What it does |
+|---|---|
+| U1 | stops ingest: pauses it and cancels the active runs |
+| U2 | with `delete data`, runs setup's purge: every table and view in both schemas, `sz_health` included, and the Volume's working data. With `--keep-data`, unbinds the two schemas, the Volume and the Lakebase project with its endpoint so the destroy leaves them |
+| U3 | `databricks bundle destroy`: the jobs, the warehouse, the dashboard, the alert, the notebook, the secret scope with the license and the password, the cluster policy and, with `delete data`, the Lakebase project, the schemas and the Volume |
+| U4 | with `delete data`, purges the Lakebase project, which Databricks otherwise keeps soft-deleted for 7 days (its id stays taken meanwhile) |
+| U5 | with `delete data`, checks that nothing remains: the two schemas, the four jobs, the warehouse, the dashboard (one the destroy moved to the trash does not count), the secret scope and the Lakebase project. Each one left is printed as `remains: …` and the exit status is 1 |
 
-- the group `sz-databricks-app`. Delete it once no install uses it:
-  `databricks groups list --filter 'displayName eq "sz-databricks-app"' -o json | jq -r '.[0].id'`
-  gives its id, then `databricks groups delete <id>`;
-- the service principal `sz-databricks-jobs`. It belongs to your Databricks account, not only this
-  workspace: leave it (a later install uses it again), or remove only its access to this workspace
-  in the workspace's admin settings (**Identity and access**, **Service principals**). Deleting it in
-  the account removes it from every workspace.
+It ends with `uninstalled: nothing remains` (with `--keep-data`, `uninstalled; the data was kept`)
+and removes the install record. Two things it never removes, because the install did not create
+them for this install alone, are printed as `kept: …`:
 
-Each user has one deployment of the bundle per target. To install in another catalog, or with
-another App name or Lakebase project, uninstall and destroy this one first: the install script stops
-on the existing deployment, naming it, before it creates anything. Running it again with the same
-catalog, App and project upgrades that install.
+- the jobs' service principal `sz-databricks-jobs`. It belongs to your Databricks account, not only
+  this workspace: leave it (a later install uses it again), or remove its access to this workspace in
+  the workspace's admin settings (**Identity and access**, **Service principals**). Deleting it in
+  the account removes it from every workspace;
+- the operator and consumer groups, which were only granted.
+
+With `--keep-data` the Lakebase project and its Senzing repository stay with the schemas, so the
+kept mart keeps its engine: a later install into the same catalog binds that project again. To remove a kept project by hand:
+`databricks postgres delete-project projects/sz-databricks --purge`.
+
+Verify that nothing remains, by hand:
+
+```sh
+databricks schemas get <catalog>.senzing_internal                     # does not exist
+databricks schemas get <catalog>.senzing                              # does not exist
+databricks jobs list -o json | jq -r '.[].settings.name' | grep '^sz-databricks-'   # prints nothing
+databricks postgres list-projects --show-deleted -o json | jq -r '.[].name' | grep sz-databricks   # prints nothing
+```
+
+Each user has one deployment of the bundle per target. To install in another catalog or with
+another Lakebase project, uninstall this one first: the install script stops on the existing
+deployment, naming it, before it creates anything (`DEPLOYMENT_DIFFERS`).
 
 ## Reference
 
 ### How far behind the mart is
 
-Each committed batch adds its affected entity ids to `<catalog>.senzing_internal._affected`; each mart
-refresh takes everything there, refreshes those entities and removes exactly what it took. So the
-rows in `_affected` are the mart's backlog. Every 15 seconds a run also records one row in
-`<catalog>.senzing_internal._loop_health` (kept 7 days): slots in use, records per second, the
-backlogs (`backlog_staged`, `backlog_affected`, `backlog_redo`) and the Lakebase sessions, waits and
-connections. A column is NULL when that signal could not be read.
+Each committed batch adds its affected entity ids to `<catalog>.senzing_internal._affected`; each
+mart refresh takes everything there, refreshes those entities and removes exactly what it took. So
+the rows in `_affected` are the mart's backlog (`sz_health.affected_pending`). Every 15 seconds a run
+also records one row in `<catalog>.senzing_internal._loop_health` (kept 7 days): slots in use,
+records per second, the backlogs (`backlog_staged`, `backlog_affected`, `backlog_redo`) and the
+Lakebase sessions, waits and connections. A column is NULL when that signal could not be read.
