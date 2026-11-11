@@ -8,7 +8,7 @@ Versions here are the releases of sz-databricks, `<senzing_version>-<build>` (fo
 `4.4.3-1`): the Senzing version the release carries and a build counter that restarts at 1 for
 each Senzing version.
 
-## [Unreleased]
+## [4.4.3-4] - 2026-11-11
 
 ### Added
 
