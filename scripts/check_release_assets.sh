@@ -3,10 +3,12 @@
 # (the tag, <senzing_version>-<build>), as release-assets.yaml names them. The private build runs it
 # before it publishes; the public signing workflow runs the same script (copied there by
 # scripts/sync_public.sh) before it signs SHA256SUMS, the one signature that covers every file. Checks:
-#   - the exact file set: one native archive per arch, the shared archive, the bundle tarball and
-#     SHA256SUMS; none empty or a link
+#   - the exact file set: one native archive per arch, the shared archive, the bundle tarball, the install
+#     script, the CORD data archive and SHA256SUMS; none empty or a link
 #   - SHA256SUMS lists exactly the others and verifies
 #   - the bundle tarball holds exactly bundle_members
+#   - the CORD data archive holds one directory named as the archive: exactly cord_top_files at its top,
+#     below them only CSV files one directory down (so never the answer key or the summary)
 #   - the bundle's engine JAR (bundle_app_jar) holds exactly jar_members under jar_dirs, and its
 #     release/payload-digests.txt lists the payload archives and the shared archive's payload manifest,
 #     each matching
@@ -32,8 +34,9 @@ err() { echo "check_release_assets.sh: $*" >&2; fail=1; }
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 
 shared="$(ra release_shared_archive)"; bundle="$(ra release_bundle_archive)"; sums="$(ra release_sums)"
+cord="$(ra release_cord_archive)"; install="$(ra release_install_script)"
 archives=("$shared"); for a in $(ra release_archs); do archives+=("$(ra release_native_archive "$a")"); done
-deliverables=("${archives[@]}" "$bundle")
+deliverables=("${archives[@]}" "$bundle" "$install" "$cord")
 
 # The exact set.
 actual="$(find "$dir" -mindepth 1 -maxdepth 1 -exec basename {} \; | LC_ALL=C sort)"
@@ -72,6 +75,26 @@ $want"
     fi
   else
     err "$bundle is not a readable tar.gz"
+  fi
+fi
+
+# The CORD data archive: <top>/ with exactly cord_top_files, every other file <top>/<system>/<table>.csv.
+if [ -s "$dir/$cord" ]; then
+  if members="$(tar -tzf "$dir/$cord" 2>/dev/null)"; then
+    top="${cord%.tar.gz}"
+    files="$(grep -v '/$' <<< "$members" | LC_ALL=C sort)"
+    got="$(grep -E "^$top/[^/]+\$" <<< "$files" || true)"
+    want="$(ra cord_top_files | lines | sed "s|^|$top/|")"
+    [ "$got" = "$want" ] || err "$cord holds at its top
+$got
+but must hold exactly
+$want"
+    other="$(grep -v -E "^$top/[^/]+\$" <<< "$files" | grep -v -E "^$top/[^/]+/[^/]+\\.csv\$" || true)"
+    [ -z "$other" ] || err "$cord holds files other than CSVs one directory below $top/:
+$other"
+    grep -E "^$top/[^/]+/[^/]+\\.csv\$" <<< "$files" >/dev/null || err "$cord holds no CSV files"
+  else
+    err "$cord is not a readable tar.gz"
   fi
 fi
 

@@ -8,6 +8,45 @@ Versions here are the releases of sz-databricks, `<senzing_version>-<build>` (fo
 `4.4.3-1`): the Senzing version the release carries and a build counter that restarts at 1 for
 each Senzing version.
 
+## [Unreleased]
+
+### Added
+
+- `sz-databricks-cord-data.tar.gz`, a file of every release: the official Senzing CORD data, Las
+  Vegas collection (about 200,000 records over six source systems), reshaped into normalized source
+  tables, one directory of CSV files per source system, with `load.sql` to load them into Delta tables
+  (change data feed on) and a `README.md`. For evaluation only, not for operational use.
+- The install script is a release file of its own, `sz-databricks-install-<release>.sh`: one run
+  verifies the release, checks the workspace (every problem listed at once as `problem=<CODE>: …`
+  before anything changes), installs, accepts the EULA (`--accept-eula`), stores the license
+  (`--license-file`), grants (`--operator-group`, `--consumer-group`), registers sources (`--source`)
+  and waits until they resolve; `--dry-run`, `--check-only`, `--upgrade`, `--alert-email`,
+  `--lakebase-vcpu` and `--set <name>=<value>` for any other bundle variable.
+- `scripts/sz.sh` operates the install from the command line: `status`, `wait`, `register` (tables
+  through a mapping view, or a Volume folder), `unregister`, `enable`, `disable`, `purge-source`,
+  `reload`, `validate`, `confirm-removal`, `requeue-rejected`, `grants`, `run`, `pause`, `resume`,
+  `stop`, `flush`, `accept-eula`, `license`, `rotate-password`, `setup`, `check`, `upgrade`, `prune`,
+  `logs` and `uninstall`. Each prints one JSON result; each is also a run of the operations job
+  `sz-databricks-ops` in the Jobs UI.
+- The `sz_health` view in the mart schema: `overall` (`OK`, `WARN`, `FAIL`), `fail_codes`, `warn_codes`
+  and one column per check. Every code and its fix is in the troubleshooting guide.
+- The `sz-databricks status` dashboard, the hourly `sz-databricks health` alert (mails `--alert-email`)
+  and the read-only SQL notebook `sz_quickstart`.
+
+### Changed
+
+- Upgrading is explicit: the new release's install script with `--upgrade`, or `sz.sh upgrade`. The
+  watcher reports `UPGRADE_PENDING` and never upgrades by itself.
+- Uninstall is `sz.sh uninstall --confirm "delete data"` (it removes everything, purges the Lakebase
+  project and checks that nothing remains) or `--confirm uninstall --keep-data`.
+- The guides describe one command-line path, install to results to health; the AI-assisted guide runs
+  it with no browser step and adds a local Streamlit report.
+
+### Removed
+
+- The Databricks App, its group `sz-databricks-app` and its pages: every task is `sz.sh` or the install
+  script. An install with the App is refused (`APP_INSTALL_PRESENT`): uninstall it first.
+
 ## [4.4.3-3] - 2026-11-10
 
 ### Fixed

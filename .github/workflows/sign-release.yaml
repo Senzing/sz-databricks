@@ -6,8 +6,8 @@ name: Sign release
 #   https://github.com/Senzing/sz-databricks/.github/workflows/sign-release.yaml@refs/tags/<release>
 #
 # THIS WORKFLOW AUTHENTICATES TO NOTHING OUTSIDE THIS REPOSITORY, and it builds
-# nothing. The release -- the payload archives, the bundle tarball (with the App
-# binary and the engine JAR) and SHA256SUMS -- is built elsewhere and PUSHED here,
+# nothing. The release -- the payload archives, the bundle tarball (with the
+# engine and watcher JARs) and SHA256SUMS -- is built elsewhere and PUSHED here,
 # as a release created by a single publishing account. This workflow reads that
 # release with its own GITHUB_TOKEN, checks it, signs SHA256SUMS keyless (cosign
 # sign-blob, the OIDC token of this run) and attaches SHA256SUMS.sigstore.json.
@@ -203,7 +203,7 @@ jobs:
             echo '```bash'
             echo "cosign verify-blob --bundle SHA256SUMS.sigstore.json --certificate-identity '${identity}' \\"
             echo "  --certificate-oidc-issuer ${OIDC_ISSUER} SHA256SUMS"
-            echo "sha256sum -c SHA256SUMS"
+            echo "sha256sum --ignore-missing -c SHA256SUMS"
             echo '```'
           } > notes.md
           body="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)"
@@ -211,3 +211,33 @@ jobs:
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber bundles/SHA256SUMS.sigstore.json
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file full.md
           cat notes.md >> "$GITHUB_STEP_SUMMARY"
+
+  # A failed signing run publishes nothing customers could verify, and nobody is
+  # watching it, so it is announced. `SLACK_BOT_TOKEN` and `SLACK_CHANNEL` are
+  # `Senzing` ORG secrets and whether they are visible to this repository has NOT
+  # been confirmed. Unguarded, an absent token turns a failed release into TWO
+  # red jobs, the second one about Slack, which buries the first. The token
+  # itself reaches only the notification step: the job-level `env:` carries a
+  # boolean.
+  notify:
+    name: notify on failure
+    if: ${{ always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+    needs: [sign]
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SLACK_CONFIGURED: ${{ secrets.SLACK_BOT_TOKEN != '' }}
+
+    steps:
+      - name: Notify Slack on failure
+        if: ${{ env.SLACK_CONFIGURED == 'true' }}
+        uses: senzing-factory/build-resources/slack-failure-notification@70dab644cea895c2091e059b2e904ba9866e11d6 # 4.5.1
+        with:
+          job-status: failure
+          slack-channel: ${{ secrets.SLACK_CHANNEL }}
+          slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
+          # The repository only: this runs on failure, which includes the run
+          # where the release was rejected, and its tag is the one input this
+          # workflow refused to trust.
+          additional-info: "${{ github.repository }}: sign release"
