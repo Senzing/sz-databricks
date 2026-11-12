@@ -25,28 +25,54 @@ internal schema. Both are the defaults; use your names if you changed them at in
 | `confirm-removal CODE --digest D` | releases a held mass removal of a files source |
 | `requeue-rejected [CODE]` | puts the records the engine rejected back for the next run |
 | `grants [CODE]` | the GRANT statements that let the jobs' principal read each source |
+| `grants --for <CODE> <view> <table>...` | the GRANT statements a source not yet registered needs (its view and tables, `catalog.schema.name` each); reads nothing |
 | `run`, `pause`, `resume`, `stop` | starts an ingest run; pauses or resumes ingest; `stop` pauses and cancels the active runs |
 | `flush [--wait S]` | starts an ingest run now, then waits for `CAUGHT_UP` |
 | `accept-eula --yes` | accepts the Senzing EULA for this release |
 | `license --file F [--check]` | stores a new license (`--check` only checks it) |
 | `rotate-password` | a new engine Lakebase password |
-| `setup`, `check`, `upgrade` | the setup job's install, check and upgrade |
+| `setup`, `check`, `upgrade` | the setup job's install, check and upgrade; `--if-needed` skips an install or upgrade that `sz_health` shows succeeded for this release (`setup_status` ok, `setup_release`) |
 | `prune` | deletes run bookkeeping and result files past their retention |
 | `logs RUN_ID` | a job run's state, its tasks and its result |
 | `uninstall …` | removes the install ([below](#uninstall)) |
 
-Each operation runs as a job of the install (the operations job `sz-databricks-ops`, about a minute
-on serverless compute, or the setup job) or reads `sz_health`, and prints one JSON object:
+`sz.sh` asks the install's Databricks App, `sz-databricks`, which runs as its own service principal
+and serves a JSON API (it has no pages). It signs in with your Databricks CLI login (`databricks auth
+token`), starts the App when it is stopped (the App stops its own compute after 30 minutes without a
+request; the install's `app_idle_minutes`, 0 keeps it running), sends the operation and follows the
+run the App starts. Each operation runs as a job of the install (the operations job
+`sz-databricks-ops` or the setup job) or reads `sz_health`. An operations job run takes 4 to 8
+minutes, most of it waiting for its serverless compute to start, and runs one at a time: a second
+operation waits for the first. Each operation prints one JSON object:
 `status`, `code`, `message`, `fix`, `next` (what to run next), `run_id`, `run_url`, `details`,
 `warnings` and `statements` (SQL for you to run, such as GRANTs). The exit status is 0 when it
 succeeded, 1 when it failed (its code and fix printed) and 2 for bad usage or an operation refused
-before anything ran (a missing `--confirm` or `--yes`). `--dry-run` before the operation prints each
-command, job parameter and statement and runs nothing. A user of the `--operator-group` can run every
-operation but `license`, `rotate-password` and `uninstall`, which need the installer's rights.
+before anything ran (a missing `--confirm` or `--yes`, or `NOT_MANAGER`: an operation that changes
+the install needs CAN MANAGE on the App). `--dry-run` before the operation prints each call and
+statement and runs nothing. The installer and a user of the `--operator-group` hold CAN MANAGE on the
+App and can run every operation; `uninstall` needs the installer's rights.
+
+**The App's API.** `sz.sh` is a client of these endpoints, which any HTTP client can call with a
+Databricks bearer token at the App's URL (`databricks apps get sz-databricks`). Errors are
+`{"status":"error","code","message"}` with a code from the [troubleshooting](troubleshooting.md) table.
+
+| Endpoint | Does |
+|---|---|
+| `GET /api` | the release, catalog, schemas, operations and setup actions, and the EULA |
+| `GET /api/health` | the `sz_health` row (`SETUP_NOT_RUN` before the first setup) |
+| `GET /api/grants[?code=]` | the GRANT statements that let the jobs' principal read each source |
+| `POST /api/ops/{op}` | an operation of the table above (its options as a JSON body): a run of `sz-databricks-ops` |
+| `POST /api/setup/{install,check,upgrade,check-license,purge}` | a run of the setup job |
+| `PUT /api/license` | `{"license": "<base64>", "check": false}`: stores (or only checks) a license |
+| `POST /api/rotate-password` | a new engine Lakebase password, then setup |
+| `GET /api/runs/{run_id}` | a started run's state, then its result |
+
+A `POST` or `PUT` needs CAN MANAGE on the App (else `NOT_MANAGER`) and answers
+`{"status":"started","run_id":N}`; follow it with `GET /api/runs/{run_id}`.
 
 **In the Jobs UI instead.** Every operation is a run of `sz-databricks-ops` with job parameters (`op`
 and its own, such as `code` and `view`): **Run now with different parameters** on that job does the
-same, and `sz.sh --dry-run <operation>` prints the exact parameters. The result is the run's output.
+same. The result is the run's output.
 
 ## Prepare a source
 
@@ -279,7 +305,12 @@ sz.sh wait --timeout 1800
 
 `wait` reads `sz_health` every 15 seconds, prints `resolve_state` and ends with one line:
 `resolve wait: <outcome> after <n> s; <records> records, <entities> entities; sz_health.overall = <overall>; exit <code>`.
-It exits 0 at `CAUGHT_UP`, 1 at `SOURCES_FAILED` or when the timeout passes (`WAIT_TIMEOUT`).
+It exits 0 at `CAUGHT_UP` and 1 at `SOURCES_FAILED`. When the timeout passes (default 1800
+seconds) it exits 0 if the install is still resolving: `overall` reads `OK`, `resolve_state` is
+`WAITING_FOR_CAPTURE` or `RESOLVING` and the records or entities grew during the wait. It then
+prints `still resolving … check with sz.sh status`, and resolution continues in the background.
+Otherwise it exits 1 (`WAIT_TIMEOUT`). A first load of 150,000 records can take longer
+than 1800 seconds; raise `--timeout`, or follow it with `sz.sh status`.
 
 | `resolve_state` | Means |
 |---|---|
@@ -562,7 +593,7 @@ It prints each step as `==> U<n> …`:
 |---|---|
 | U1 | stops ingest: pauses it and cancels the active runs |
 | U2 | with `delete data`, runs setup's purge: every table and view in both schemas, `sz_health` included, and the Volume's working data. With `--keep-data`, unbinds the two schemas, the Volume and the Lakebase project with its endpoint so the destroy leaves them |
-| U3 | `databricks bundle destroy`: the jobs, the warehouse, the dashboard, the alert, the notebook, the secret scope with the license and the password, the cluster policy and, with `delete data`, the Lakebase project, the schemas and the Volume |
+| U3 | `databricks bundle destroy`: the App, the jobs, the warehouse, the dashboard, the alert, the notebook, the secret scope with the license and the password, the cluster policy and, with `delete data`, the Lakebase project, the schemas and the Volume |
 | U4 | with `delete data`, purges the Lakebase project, which Databricks otherwise keeps soft-deleted for 7 days (its id stays taken meanwhile) |
 | U5 | with `delete data`, checks that nothing remains: the two schemas, the four jobs, the warehouse, the dashboard (one the destroy moved to the trash does not count), the secret scope and the Lakebase project. Each one left is printed as `remains: …` and the exit status is 1 |
 

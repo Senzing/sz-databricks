@@ -8,6 +8,33 @@ Versions here are the releases of sz-databricks, `<senzing_version>-<build>` (fo
 `4.4.3-1`): the Senzing version the release carries and a build counter that restarts at 1 for
 each Senzing version.
 
+## [4.4.3-5] - 2026-11-12
+
+### Added
+
+- The Databricks App `sz-databricks`, headless: a JSON API with no pages, running as its own service
+  principal. `GET /api`, `GET /api/health` (the `sz_health` row) and `GET /api/grants`; with CAN
+  MANAGE on the App (else `NOT_MANAGER`), `POST /api/ops/{op}` and `POST /api/setup/{action}` start a
+  run of the operations or setup job and answer its run id, `PUT /api/license` stores a license and
+  `POST /api/rotate-password` replaces the engine password; `GET /api/runs/{run_id}` reports a run and
+  its result. The App stops its compute after 30 minutes without a request (`app_idle_minutes`, 0
+  keeps it running), and the watcher stops it should it not; `app_compute_size` and `app_group` set its size and its group. The bundle
+  tarball carries its binary in `app/`.
+- The install script starts the App after the deploy and waits until it is RUNNING
+  (`APP_NOT_RUNNING`); `admin.sh pre` creates the group `sz-databricks-app`, which has WRITE on the
+  secret scope, and `admin.sh app` adds the App's service principal to it.
+
+### Changed
+
+- `sz.sh` calls the App: it starts a stopped App, sends the operation and follows the run it
+  started; `status` and `wait` read `GET /api/health`. Its output and exit codes are unchanged; an
+  operation that changes the install needs CAN MANAGE on the App, which `--operator-group` grants.
+  `uninstall` runs from your shell as before and also removes the App.
+
+### Removed
+
+- The install's refusal of a workspace holding a Databricks App (`APP_INSTALL_PRESENT`).
+
 ## [4.4.3-4] - 2026-11-11
 
 ### Added

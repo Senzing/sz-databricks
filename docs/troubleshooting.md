@@ -22,6 +22,7 @@ SENZING® entity resolution installed with the default names (`sz-databricks`, `
 |---|---|
 | the install | the install script's output: each step (`==> P<n> …`) is printed before it runs, and a failed step says what to fix; run the script again with the same options once it is fixed |
 | an `sz.sh` operation | its JSON: `code`, `message`, `fix` and `run_url`; `sz.sh logs <run id>` shows the run's state, tasks and result |
+| the App (`APP_NOT_RUNNING`, `WORKSPACE_CALL`) | `databricks apps get sz-databricks`: its `app_status` and `compute_status`; the App's logs in the workspace (**Compute**, **Apps**, `sz-databricks`, **Logs**) |
 | a setup run | `sz_health.setup_status`, `setup_error` and `last_setup_warnings`, then the `sz-databricks-setup` job's runs and their driver log |
 | an ingest run | `sz_health.last_run_state` and `last_run_error`, then the `sz-databricks-ingest` job's runs and their driver log: `MART_REFRESH` lines show where a mart refresh spends its time (`read_ms`, `get_ms`, `merge_ms`, `delete_ms`) |
 | the watcher (a change starts no run, a pause does not finish) | `sz_health.watch_error` and `watch_pending`, then the `sz-databricks-watch` job's runs and their output |
@@ -39,7 +40,7 @@ SENZING® entity resolution installed with the default names (`sz-databricks`, `
 | `sz-databricks-install-<release>.sh: the signature of SHA256SUMS does not verify: …` | `SHA256SUMS` or `SHA256SUMS.sigstore.json` is not the one this release signed (another release's, or damaged): download both again from the same release and pass that release (the tag without its `v`). Install nothing until it passes. |
 | `sz-databricks-install-<release>.sh: a release file does not match SHA256SUMS` (the failing file printed above) | A file is damaged, from another release or not completely downloaded: download it again from the same release. |
 | `sz-databricks-install-<release>.sh: SHA256SUMS does not list sz-databricks-bundle-<release>.tar.gz` | The bundle is not this release's: download the release's files together. |
-| `sz-databricks-install-<release>.sh: the check found <n> problem(s)` | The codes it prints are in the [table below](#sz_health-and-script-codes): `SERVERLESS_ONLY`, `DEPLOYMENT_DIFFERS`, `APP_INSTALL_PRESENT`, `PROJECT_SOFT_DELETED`, `NOT_INSTALLED`, `EULA_NOT_ACCEPTED` (a new install without `--accept-eula`), `NODE_SIZING`, `PG_TOO_SMALL`, `LICENSE_INVALID`. Nothing was changed. |
+| `sz-databricks-install-<release>.sh: the check found <n> problem(s)` | The codes it prints are in the [table below](#sz_health-and-script-codes): `SERVERLESS_ONLY`, `PROFILE_PAT`, `DEPLOYMENT_DIFFERS`, `PROJECT_SOFT_DELETED`, `NOT_INSTALLED`, `EULA_NOT_ACCEPTED` (a new install without `--accept-eula`), `NODE_SIZING`, `PG_TOO_SMALL`, `LICENSE_INVALID`. Nothing was changed. |
 | `node-sizing.sh: worker_task_slots <n> is above the <m> engine threads one <node type> worker holds: …` | One worker of that node type cannot give each engine thread 1 GB beside the heap, the engine and the Databricks reserve; the message shows the numbers. Pass `--set worker_task_slots=<m>` or less, a smaller `--set executor_memory=…`, or a `--set node_type_id=…` with more memory ([Sizing](use.md#sizing)). |
 | `node-sizing.sh: node type <node type> is not in this workspace's node types` | `node_type_id` names a type this workspace does not offer: pick one from `databricks clusters list-node-types`. |
 | Deploy fails: "must have 'servicePrincipal.user' role on the service principal" | The deploying user lacks the **Service principal: User** role on the jobs' principal. The install gives it to the user running the install script; run the install as that user. |
@@ -53,6 +54,9 @@ SENZING® entity resolution installed with the default names (`sz-databricks`, `
 | Setup fails: `native postgres login is disabled for this endpoint` | The engine's password role cannot log in. Turn native login on with `databricks postgres update-project projects/<project-id> spec.enable_pg_native_login --json '{"spec":{"enable_pg_native_login":true}}'`, then `sz.sh setup`. |
 | You cannot create either of those | Create the database and roles by hand from `scripts/lakebase-setup.sql` in the bundle directory, then run setup without its Lakebase admin step: on the `sz-databricks-setup` job, choose **Run now with different parameters** and set `action` to `install` and `admin` to `skip`. |
 | After an upgrade the run ends `mart_failed`: "The entity mart has an earlier release's tables" | The mart is now an entity map without `entity_doc`; nothing was dropped. `sz.sh pause`, run the statements the error prints (they queue every entity the old mart held, then drop its tables) and `sz.sh resume`: the next refresh rebuilds the mart. |
+| `sz-databricks-install-<release>.sh: <n> source(s) could not be registered; run every statement below …` | The jobs' principal cannot read those sources (`SOURCE_NO_ACCESS`) or a table has change data feed off (`SOURCE_CDF_OFF`); the other sources were registered. Run every statement it lists (the table owner runs an `ALTER TABLE`), then run the same install command again: the registered sources are kept. |
+| A network error while the install or `sz.sh` waits on a run or the App: `lookup <host>: no such host`, `connection reset`, `connection refused`, `i/o timeout`, `curl exit <n>` | `sz.sh` retries a call that fails on the network every 10 seconds for 5 minutes (`network_retry_secs`), then stops. The run it started goes on in the workspace. Once the network is back, run the same command again: it is idempotent. The install skips what exists (a setup that succeeded for this release, the sources registered); `sz.sh status` shows the state. |
+| `resolve wait: still resolving (WAITING_FOR_CAPTURE)` or `(RESOLVING)` … `exit 0` | Not a failure: the wait (`--resolve-wait` or `--timeout`, default 1800 seconds) ended while `sz_health.overall` reads `OK` and the records still rise. `WAITING_FOR_CAPTURE` means a source still has changes to read, a reload is pending or the watcher has a run to start; `RESOLVING` means a run is loading records or the mart is catching up. Resolution continues in the background: follow it with `sz.sh status` or `sz.sh wait`. |
 | A change starts no run | The watcher runs every 5 minutes and waits a few minutes for its serverless compute: allow about 10 minutes. It starts nothing while ingest is paused (`PAUSED`), a run or setup is active or an upgrade is pending (`UPGRADE_PENDING`). Otherwise read `sz_health.watch_error`. |
 | `sz.sh` exits 2: `CONFIRM_REQUIRED` | A destructive operation repeats its target as the confirm word: `--confirm <CODE>` for `purge-source` and `reload`, `--confirm "delete data"` or `--confirm uninstall --keep-data` for `uninstall`. |
 | One source fails, others continue | It is isolated: its position does not advance and `source_errors` shows the error with the fix. Fix the view or the grant; the next run tries again. |
@@ -77,8 +81,8 @@ only come from a script.
 |---|---|---|
 | `USAGE` | bad arguments, or a tool or release file missing | `sz.sh --help`, or the install script's `--help`; install the tool or download the file it names |
 | `NOT_INSTALLED` | no install record, or the jobs are not found | run the install script ([install](install.md)) |
-| `APP_INSTALL_PRESENT` | your deployment is an install with the Databricks App, which this release no longer has | uninstall it with the release you installed it from, then install this release |
 | `PROJECT_SOFT_DELETED` | the Lakebase project is soft-deleted (Databricks keeps it 7 days), so its id is taken | `databricks postgres delete-project projects/<id> --purge`, then install again |
+| `PROFILE_PAT` | the Databricks CLI profile signs in with a personal access token (or no login could be read); the install's App accepts only an OAuth login | `databricks auth login --host <workspace-url> --profile <name>`, then install with `--profile <name>` |
 | `SERVERLESS_ONLY` | the workspace has no classic compute, which the setup and ingest jobs run on | install in a workspace with classic compute for jobs |
 | `DEPLOYMENT_DIFFERS` | you already have a deployment of this bundle with another catalog or Lakebase project (one user has one per target) | to upgrade it, run the install script again with the catalog and project it names; to install elsewhere, uninstall it first ([uninstall](use.md#uninstall)) |
 | `NODE_SIZING` | the node type cannot hold the engine threads | pick a node type, `executor_memory` or `worker_task_slots` from the printed numbers ([Sizing](use.md#sizing)) |
@@ -116,13 +120,17 @@ only come from a script.
 | `RUN_FAILED` (FAIL) | the latest ingest run failed | `sz.sh logs <run id>`; `last_run_error` says why |
 | `RUN_SKIPPED` | another run is active | wait; `sz.sh status` |
 | `PAUSED` (WARN) | ingest is paused | `sz.sh resume` |
-| `WAIT_TIMEOUT` | not caught up within the timeout | `sz.sh status`; raise `--timeout` |
+| `WAIT_TIMEOUT` | not caught up within the timeout, with no progress or `sz_health` not `OK` | `sz.sh status`: fix each code it shows; if `resolve_state` reads `WAITING_FOR_CAPTURE` with no source failed, the watcher or the next ingest run has not started yet (allow about 10 minutes), then `sz.sh wait` again |
 | `REJECTED_KEYS` (WARN) | the engine rejected records | fix the records shown in `_ingest_quarantine`, then `sz.sh requeue-rejected` |
 | `MART_QUARANTINE` (WARN) | entities could not be written to the mart | the mart's `_quarantine` rows show why; they are retried by the next refresh |
 | `WATCH_ERRORS` (WARN) | the watcher's last run failed | `sz.sh status` shows its error (`watch_error`) |
 | `PURGE_RUNNING` (WARN) | a source purge is in progress | wait for it; `sz.sh status` |
 | `PURGE_FAILED` (WARN) | a source purge failed | `sz.sh status` shows its error; fix it, then purge the source again |
 | `EXISTING_RECORDS` (WARN) | the last install found records of data sources not registered (an earlier install's) | keep them (they resolve with the new ones), purge their source, or uninstall and install anew |
+| `NOT_MANAGER` | the call changes the installation and you do not hold CAN MANAGE on the App | an App manager grants you CAN MANAGE on the App (`databricks apps set-permissions`), or runs the command |
+| `WORKSPACE_CALL` | the App's call to the workspace (jobs, secrets, warehouse, files) failed | the message names the call and its HTTP status; check the App's service principal still has its bound resources, then retry |
+| `RUN_NOT_FOUND` | the run is not a run of this installation's jobs, or no longer exists | pass a run id that `sz.sh` printed for this installation |
+| `APP_NOT_RUNNING` | the App did not reach RUNNING | `databricks apps get <app>`; `databricks apps start <app>`, then retry (the App stops itself after its idle period) |
 
 ## Reading the Lakebase waits
 

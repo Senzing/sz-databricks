@@ -54,6 +54,7 @@ files, the license file, the workspace) and lists every problem at once, each as
 | `--job-run-as <application id>` | a service principal you already have for the jobs, instead of `sz-databricks-jobs` |
 | `--resolve-wait <seconds>` | how long to wait for the sources to resolve (default 1800) |
 | `--upgrade` | upgrade an installed release ([upgrade](use.md#upgrade)) |
+| `--force-setup` | run setup on a re-run even when it succeeded for this release |
 | `--check-only` | verify and unpack the release, then stop: nothing in the workspace is read or changed |
 | `--dry-run` | print every step; change nothing |
 
@@ -66,15 +67,15 @@ It runs these steps, each printed as `==> P<n> …` before it runs:
 |---|---|
 | P0 local checks | the tools (`databricks`, `jq`, `tar`, `openssl`, `cosign`, `sha256sum` or `shasum`), the release files and the license file (not empty, base64, a multiple of 4 characters, at most 64 KB) |
 | P1 verify and unpack | the signature of `SHA256SUMS` against the exact identity in the [README](../README.md#verify), the SHA-256 of each file it uses (which must be listed), then unpacks the bundle into `--dir` |
-| P2 check | `scripts/preflight.sh`: stops before anything is created on a serverless-only workspace, on an earlier install that had a Databricks App, on your existing deployment of this bundle in another catalog or Lakebase project (one deployment per user and target; [uninstall](use.md#uninstall)), on a soft-deleted Lakebase project holding the project id and, on a new install, on a EULA you have not accepted |
+| P2 check | `scripts/preflight.sh`: stops before anything is created on a serverless-only workspace, on your existing deployment of this bundle in another catalog or Lakebase project (one deployment per user and target; [uninstall](use.md#uninstall)), on a soft-deleted Lakebase project holding the project id and, on a new install, on a EULA you have not accepted |
 | P3 size | `scripts/node-sizing.sh`: stops when one worker of the node type cannot hold the engine threads at 1 GB each ([Sizing](use.md#sizing)), and when Lakebase is set below 4 compute units |
-| P4 pre | `scripts/admin.sh pre`: creates the two schemas (`senzing_internal`, `senzing`) and the Volume `files`, the jobs' service principal `sz-databricks-jobs` (unless it exists) with the `workspace-access` entitlement and USE CATALOG, and gives you the **Service principal: User** role on it, which the deploy needs |
+| P4 pre | `scripts/admin.sh pre`: creates the two schemas (`senzing_internal`, `senzing`) and the Volume `files`, the jobs' service principal `sz-databricks-jobs` (unless it exists) with the `workspace-access` entitlement and USE CATALOG, and gives you the **Service principal: User** role on it, which the deploy needs; creates the App's group `sz-databricks-app` (unless it exists) |
 | P5 bind | binds those schemas and the Volume to the bundle, so one deploy is enough; also binds a Lakebase project an `uninstall --keep-data` kept, with its Senzing repository |
-| P6 deploy | `databricks bundle deploy -t prod`: the jobs, the Lakebase project, the secret scope, the SQL warehouse, the dashboard, the alert and the notebook; writes the install record. A dry run prints the bundle's grants here |
+| P6 deploy | `databricks bundle deploy -t prod`: the Databricks App `sz-databricks`, the jobs, the Lakebase project, the secret scope, the SQL warehouse, the dashboard, the alert and the notebook; writes the install record; then starts the App and waits until it is RUNNING (`APP_NOT_RUNNING` otherwise). A dry run prints the bundle's grants here |
 | P7 secrets | generates the engine's Lakebase password and stores it and the license in the secret scope (on stdin, never printed) |
-| P8 grants | `scripts/admin.sh post`, and `operator` and `consumer` for the groups you named |
-| P9 EULA and setup | runs the setup job: it stages the engine payload into the Volume (the first run downloads about 600 MB), creates the `senzing` database and the `sz_engine` role in Lakebase, the Senzing schema and default configuration, the install's tables, the entity mart and `sz_health`, and records your EULA acceptance. On a re-install over kept data it then resumes ingest, which the uninstall paused |
-| P10 sources | `sz.sh register` for each `--source`, then `sz.sh wait` until `sz_health.resolve_state` reads `CAUGHT_UP` |
+| P8 grants | `scripts/admin.sh post` and `app`, and `operator` and `consumer` for the groups you named |
+| P9 EULA and setup | runs the setup job: it stages the engine payload into the Volume (the first run downloads about 600 MB), creates the `senzing` database and the `sz_engine` role in Lakebase, the Senzing schema and default configuration, the install's tables, the entity mart and `sz_health`, and records your EULA acceptance. A re-run skips it when `sz_health` shows setup succeeded for this release, unless you pass `--license-file` or `--force-setup` or P7 generated a new engine password. On a re-install over kept data it then resumes ingest, which the uninstall paused |
+| P10 sources | `sz.sh register` for each `--source` (a dry run prints the `GRANT` statements every source needs, all sources together; a registration refused for access or change data feed lets the others run, then the install stops with every statement they need), then `sz.sh wait` until `sz_health.resolve_state` reads `CAUGHT_UP`, for at most `--resolve-wait` seconds (default 1800). A wait that ends while the install is healthy and its records still rise is not a failure: it prints `still resolving … check with sz.sh status` and the install goes on to P11 |
 | P11 health | `sz.sh status`: `sz_health.overall` must read `OK` |
 
 Every step is idempotent: run the same command again after fixing a failure and it skips what
@@ -145,7 +146,9 @@ Nothing beyond this list; a dry run prints each grant.
 |---|---|
 | the jobs' service principal (`sz-databricks-jobs`) | the `workspace-access` entitlement, USE CATALOG on `<catalog>`; USE SCHEMA, SELECT, MODIFY and CREATE TABLE on both schemas; READ and WRITE VOLUME on the Volume; READ on the secret scope; CAN USE on the cluster policy; CAN MANAGE RUN on the setup, ingest and watcher jobs; a Lakebase OAuth role with CREATEDB and CREATEROLE (no superuser) |
 | you, the installer | the **Service principal: User** role on the jobs' principal; USE SCHEMA and SELECT on both schemas (the jobs' principal creates and owns every table and view in them, `sz_health` among them, so owning the catalog does not let you read them); you own the deployment and MANAGE the secret scope |
-| `--operator-group` | CAN MANAGE RUN on the setup, operations and ingest jobs, READ VOLUME on the Volume (the operations' results), SELECT on `sz_health`, CAN USE on the warehouse and the USE CATALOG and USE SCHEMA those need |
+| the App's service principal | membership of the group `sz-databricks-app`, which has WRITE on the secret scope (the App stores the license and the engine password); CAN MANAGE on the App (it reads the App's permissions to check a caller's); USE CATALOG on `<catalog>` and SELECT on both schemas; CAN MANAGE RUN on the setup, ingest, watcher and operations jobs, CAN USE on the warehouse, READ and WRITE VOLUME on the Volume (run results and its activity record) and access to the Lakebase database, bound to the App |
+| the jobs' service principal, on the App | CAN MANAGE: the watcher stops the App when it has been idle for `app_idle_minutes`, should the App not stop itself |
+| `--operator-group` | CAN MANAGE on the App (every `sz.sh` operation but `uninstall`), CAN MANAGE RUN on the setup, operations and ingest jobs, READ VOLUME on the Volume (the operations' results), SELECT on `sz_health`, CAN USE on the warehouse and the USE CATALOG and USE SCHEMA those need |
 | `--consumer-group` | USE CATALOG on `<catalog>`, USE SCHEMA and SELECT on the mart schema `senzing` (the entity tables and `sz_health`), CAN USE on the warehouse and CAN READ on the dashboard |
 
 The jobs run as that principal, so they reach only its rights, never yours. Give it nothing beyond
@@ -165,7 +168,10 @@ not have is refused. The most used:
 | `schema` | `senzing_internal` | the internal schema (registry, status, bookkeeping) and the Volume's home |
 | `mart_schema` | `senzing` | the schema of the entity mart and `sz_health`, the one you grant to readers |
 | `volume` | `files` | the Volume in the internal schema |
-| `app_name` | `sz-databricks` | the name the jobs, the warehouse, the cluster policy, the dashboard and the alert are named after |
+| `app_name` | `sz-databricks` | the name of the Databricks App, and the name the jobs, the warehouse, the cluster policy, the dashboard and the alert are named after |
+| `app_idle_minutes` | `30` | minutes without a request after which the App stops its compute (`sz.sh` starts it again); `0` keeps it running |
+| `app_compute_size` | `MEDIUM` | the App's compute size (`MEDIUM`, `LARGE` or `XLARGE`) |
+| `app_group` | `sz-databricks-app` | the group that holds the App's service principal and has WRITE on the secret scope |
 | `lakebase_project` | `sz-databricks` | the Lakebase project id (unique in the workspace) |
 | `warehouse_id` | the warehouse the bundle creates | a SQL warehouse you already have (the bundle's is still created, and stays stopped) |
 | `payload_source` | `github-release` | where the setup job reads the engine payload ([below](#restricted-network-stage-the-payload)) |
@@ -217,39 +223,33 @@ and verify it like the other files ([README](../README.md#verify)), then:
 ```sh
 tar -xzf sz-databricks-cord-data.tar.gz
 cd sz-databricks-cord-data
-cat README.md load.sql   # what it holds, and what the statements do
+cat README.md   # what it holds: 26 tables in six source systems
 ```
 
-`load.sql` names its objects in full, in the catalog `sz_cord_data`, which must exist: replace
-`sz_cord_data` throughout the file to load into another catalog. Part 1 creates the schema
-`cord_stage` with the Volume `files`, then one schema per source system with its tables, every table
-with Change Data Feed on. Then upload each source directory to the Volume:
+`load.sh` loads it into a catalog you name, which must exist: use the catalog you install
+sz-databricks into. It runs `load.sql` one statement at a time through the Statement Execution API
+on a SQL warehouse you can use (`databricks warehouses list`), with your catalog in place of the
+`sz_cord_data` the file names. Part 1 creates the schema `cord_stage` with the Volume `files`, then
+one schema per source system with its tables, every table with Change Data Feed on. The script then
+uploads each source directory to the Volume and runs part 2: `COPY INTO` loads every table. Last it
+prints every table's loaded and expected row counts and exits 0 only when they are equal. It needs
+`jq`; `--dry-run` prints every statement and upload and runs nothing.
 
 ```sh
-for s in crm provider_registry vendor_master risk_watchlist loan_portfolio entity_reference; do
-  databricks fs cp -r "$s" "dbfs:/Volumes/sz_cord_data/cord_stage/files/$s"
-done
-```
-
-Part 2 loads every table with `COPY INTO`, then compares every table's loaded and expected row
-counts; they must be equal. Each statement stands alone: run them in a SQL editor, or one at a time
-from the command line through the Statement Execution API on any SQL warehouse you can use
-(`databricks warehouses list`):
-
-```sh
-databricks api post /api/2.0/sql/statements --json \
-  '{"warehouse_id": "<warehouse id>", "statement": "<one statement>", "wait_timeout": "50s"}'
+./load.sh <catalog> <warehouse id> [--profile <name>]
 ```
 
 Re-running is safe: objects are created only if missing and `COPY INTO` skips files it already
-loaded. The tables are ordinary business tables, not Senzing records: map each source system to the
-Senzing entity specification with a mapping view before you register it
-([use](use.md#write-a-mapping-view)), then pass one `--source` per source system.
+loaded. The tables are ordinary business tables, not Senzing records: map them to the
+Senzing entity specification with mapping views before you register them
+([use](use.md#write-a-mapping-view)), then pass one `--source` per mapping view. A source system
+can hold more than one kind of record: `crm` holds organizations (`accounts`) and people
+(`contacts`), so it maps to two views, each its own data source.
 
 A view that only looks up another table, such as a view over `crm.contacts` that reads each
 contact's account from `crm.accounts`, also needs one `--source-via` for that table
 ([sources at install](#sources-at-install)):
-`--source-via <CODE>=sz_cord_data.crm.accounts.account_id:sz_cord_data.crm.contacts.account_id.contact_id`.
+`--source-via <CODE>=<catalog>.crm.accounts.account_id:<catalog>.crm.contacts.account_id.contact_id`.
 
 Next: [watch it resolve](use.md#watch-it-resolve). If a step fails:
 [troubleshooting](troubleshooting.md).
