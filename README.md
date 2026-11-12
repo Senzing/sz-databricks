@@ -56,7 +56,9 @@ You register a mapping view over your tables, or a Volume folder. A watcher job 
 changes and starts the ingest job, which loads each change into the Senzing engine (its repository
 is a Lakebase PostgreSQL database), processes the follow-up work the engine queues and writes the
 entities that changed to the `entity`, `entity_record` and `relationship` tables you query. You
-operate it with one script, `sz.sh`; one view, `sz_health`, says whether everything is well.
+operate it with one script, `sz.sh`, a client of the install's headless Databricks App (a JSON API,
+no pages), which starts the operations and setup jobs; one view, `sz_health`, says whether
+everything is well.
 
 ```mermaid
 %%{init: {"theme":"base","themeVariables":{"primaryColor":"#FAF8F3","primaryTextColor":"#18160F","primaryBorderColor":"#F57826","lineColor":"#F57826","secondaryColor":"#FFFFFF","tertiaryColor":"#FAF8F3","edgeLabelBackground":"#FAF8F3","clusterBkg":"#FFFFFF","clusterBorder":"#F57826","fontFamily":"Roboto, Helvetica Neue, Arial, sans-serif"}}}%%
@@ -64,8 +66,9 @@ flowchart LR
   subgraph ws["Your Databricks workspace"]
     T["Your tables<br/>(Change Data Feed)"] --> I
     F["Your files<br/>(a Volume folder)"] --> I
-    O["sz.sh<br/>(your shell)"] -- operations --> P["Operations job<br/>serverless"]
-    O -- setup, upgrade --> S["Setup job"]
+    O["sz.sh<br/>(your shell)"] -- JSON API --> A["Databricks App<br/>headless"]
+    A -- operations --> P["Operations job<br/>serverless"]
+    A -- setup, upgrade --> S["Setup job"]
     W["Watcher job<br/>serverless, every 5 minutes"] -- starts on changes --> I["Ingest job<br/>classic job cluster"]
     S --> L
     I <--> L[("Lakebase<br/>Senzing repository")]
@@ -76,10 +79,11 @@ flowchart LR
 
 | Part | Runs as | Does |
 |---|---|---|
+| `sz-databricks` | Databricks App, its own service principal | the JSON API `sz.sh` calls: reads `sz_health`, starts and reports runs of the operations and setup jobs, stores the license; an operation that changes the install needs CAN MANAGE on the App; stops its compute after 30 minutes without a request (the watcher stops it if it does not) |
 | `sz-databricks-setup` | job, single-node classic cluster | stages the engine payload into your Volume, creates the Senzing database and role in Lakebase and the install's tables, records the EULA acceptance and checks the license |
 | `sz-databricks-ingest` | job, autoscaling classic cluster | reads each source's new changes, resolves them, processes redo (follow-up work the engine queues when a change to one entity means related entities must be evaluated again) and keeps the entity mart current; stops after 10 idle minutes |
 | `sz-databricks-watch` | job, serverless, every 5 minutes | starts the ingest job when a source changed, finishes a pause and reports a release that still needs `sz.sh upgrade` |
-| `sz-databricks-ops` | job, serverless | one operation per run, started by `sz.sh`: register a source, pause, resume, purge and the rest |
+| `sz-databricks-ops` | job, serverless | one operation per run, started by the App for `sz.sh`: register a source, pause, resume, purge and the rest |
 | Lakebase project `sz-databricks` | Lakebase Autoscaling, PostgreSQL 17 | the Senzing repository; scales to zero when idle |
 | `sz_health` | a view in the mart schema | one row: `overall` (`OK`, `WARN` or `FAIL`), each failing check's code and `resolve_state` |
 | `sz-databricks status` and `sz-databricks health` | AI/BI dashboard, SQL alert | the dashboard shows runs, engine health, quarantined records, each source's position and the mart's counts; the alert mails you when `sz_health` is not `OK` |
@@ -94,7 +98,7 @@ scheduled runs bill.
 | File | Content |
 |---|---|
 | `sz-databricks-install-<release>.sh` | the install script: verifies the release, unpacks the bundle and installs or upgrades it ([install](docs/install.md)) |
-| `sz-databricks-bundle-<release>.tar.gz` | the Databricks Asset Bundle: `databricks.yml`, `resources/`, the engine and watcher JARs in `lib/`, the demo notebook, the dashboard and the scripts `scripts/sz.sh`, `scripts/admin.sh`, `scripts/preflight.sh`, `scripts/node-sizing.sh`, `scripts/verify-release.sh` and `scripts/lakebase-setup.sql` |
+| `sz-databricks-bundle-<release>.tar.gz` | the Databricks Asset Bundle: `databricks.yml`, `resources/`, the App's binary in `app/`, the engine and watcher JARs in `lib/`, the demo notebook, the dashboard and the scripts `scripts/sz.sh`, `scripts/admin.sh`, `scripts/preflight.sh`, `scripts/node-sizing.sh`, `scripts/verify-release.sh` and `scripts/lakebase-setup.sql` |
 | `sz-databricks-engine-shared-<release>.tar.gz` | the engine payload's shared part: the Senzing runtime the setup job stages into your Volume |
 | `sz-databricks-engine-native-<release>-linux-arm64.tar.gz`, `sz-databricks-engine-native-<release>-linux-amd64.tar.gz` | the engine payload's native libraries, one archive per architecture; together with the shared archive about 600 MB |
 | `sz-databricks-cord-data.tar.gz` | optional: the official Senzing [Collections Of Relatable Data (CORD)](https://senzing.com/senzing-ready-data-collections-cord/), Las Vegas collection, reshaped into normalized source tables ([below](#no-data-of-your-own-use-the-cord-data)) |
@@ -109,13 +113,13 @@ later build than `4.4.3-7`. The tag is the release.
 
 | Rule | |
 |---|---|
-| Everything runs in your workspace | the jobs, Lakebase, your data, logs and status |
+| Everything runs in your workspace | the App, the jobs, Lakebase, your data, logs and status |
 | Senzing, Inc. hosts nothing and receives nothing | it publishes software only: the release files. Two optional steps that you start send something to Senzing, Inc.: the Senzing MCP server receives what you or your assistant send it (column names and the mapping when mapping: the mapper runs on your machine, over a sample you export there, and never sends your records), and Ask Senzing receives the details you give it when you request an evaluation license |
 | One download | the setup job fetches its release's payload from this repository's GitHub release; with a Volume as the payload source it needs no egress at all |
 | The payload is pinned | setup refuses any payload archive whose SHA-256 differs from the digests compiled into the release's engine JAR, so verifying the bundle verifies the payload |
-| Your secrets stay in your secret scope | the license and the engine's database password live in the bundle's secret scope (`sz_databricks`): the jobs' principal reads it, the installer writes it, and no script prints either |
-| Least privilege | the jobs run as a dedicated service principal (`sz-databricks-jobs`), never as you. The install grants only what [install](docs/install.md#what-the-install-grants) lists, and prints every grant in a dry run first |
-| Your results stay yours | nobody but the installer and the jobs' principal can read the entity mart until you name a consumer group |
+| Your secrets stay in your secret scope | the license and the engine's database password live in the bundle's secret scope (`sz_databricks`): the jobs' principal reads it, the installer and the App (through its group `sz-databricks-app`) write it, and no script prints either |
+| Least privilege | the jobs run as a dedicated service principal (`sz-databricks-jobs`), never as you, and the App as its own; an operation that changes the install needs CAN MANAGE on the App. The install grants only what [install](docs/install.md#what-the-install-grants) lists, and prints every grant in a dry run first |
+| Your results stay yours | nobody but the installer, the jobs' principal and the App's can read the entity mart until you name a consumer group |
 
 ## Prerequisites
 
@@ -123,7 +127,7 @@ later build than `4.4.3-7`. The tag is the release.
 |---|---|
 | An AWS Databricks workspace | with Unity Catalog, classic compute for jobs (Graviton by default; a serverless-only workspace has none, and the install script stops on one), serverless jobs, Lakebase Autoscaling (AWS only today) and serverless SQL warehouses |
 | A workspace admin with MANAGE on the catalog | runs the install; the install creates a service principal for the jobs (`sz-databricks-jobs`) |
-| Databricks CLI **1.23.0** or later, `jq`, `cosign`, `openssl`, `tar` | on the machine you install from (bash), with a CLI profile for the workspace; `sha256sum` or `shasum`. The bundle is validated with CLI 1.23.0; check yours with `databricks -v` |
+| Databricks CLI **1.23.0** or later, `jq`, `cosign`, `openssl`, `tar` | on the machine you install from (bash), with a CLI profile for the workspace that signs in with OAuth (`databricks auth login --host <workspace-url> --profile <name>`; the App refuses personal access tokens); `sha256sum` or `shasum`. The bundle is validated with CLI 1.23.0; check yours with `databricks -v` |
 | Outbound access from the job clusters | to `github.com`, `release-assets.githubusercontent.com` and `objects.githubusercontent.com`, for the payload download only; or stage the payload in a Volume ([install](docs/install.md#restricted-network-stage-the-payload)) |
 | A Senzing license (optional) | without one the engine runs in evaluation mode and takes few records; [getting one](docs/install.md#the-license) |
 | Data to resolve | your tables, a folder of Senzing JSON lines files or the [CORD data](#no-data-of-your-own-use-the-cord-data) |
@@ -149,7 +153,8 @@ parts:
 | Resource | When it bills |
 |---|---|
 | The watcher job (serverless) | each scheduled run, every 5 minutes by default (`--set watch_cron=…`) |
-| The operations job (serverless) | each `sz.sh` operation, about a minute |
+| The Databricks App | while it runs: `sz.sh` starts it, and it stops after 30 minutes without a request (`--set app_idle_minutes=…`, 0 keeps it running) |
+| The operations job (serverless) | each `sz.sh` operation, 4 to 8 minutes (most of it the serverless compute starting) |
 | The job clusters (setup and ingest) | only during a run: an ingest run ends after 10 idle minutes and its cluster stops |
 | The SQL warehouse (2X-Small, serverless) | while it answers `sz.sh status`, the dashboard, the hourly alert or your queries; it stops after 5 idle minutes |
 | Lakebase | compute while awake (4 compute units by default; it scales to zero after 30 idle minutes) and the storage of the Senzing repository |
@@ -222,7 +227,7 @@ and unpacks the bundle for real, then stops: nothing in the workspace is read or
 
 ## Versions
 
-Each release is one version of everything: the bundle, the engine and watcher JARs, the scripts and
+Each release is one version of everything: the bundle, the App, the engine and watcher JARs, the scripts and
 the payload. Upgrading is running the new release's install script with `--upgrade`
 ([upgrade](docs/use.md#upgrade)); until then `sz_health` reports `UPGRADE_PENDING` and no run
 starts. An install never downgrades.

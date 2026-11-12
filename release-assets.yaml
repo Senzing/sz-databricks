@@ -12,7 +12,7 @@ release_sums: SHA256SUMS
 release_archs: "arm64 amd64"
 # Every file of the bundle tarball (directories aside); lib/ holds the engine and watcher JARs, scripts/ the customer
 # scripts (scripts/copy_customer_scripts.sh).
-bundle_members: "bundle/dashboards/sz_status.lvdash.json bundle/databricks.yml bundle/lib/.gitignore bundle/lib/sz-databricks-engine-{release}.jar bundle/lib/sz-databricks-watch-{release}.jar bundle/notebooks/sz_quickstart.sql bundle/resources/alerts.yml bundle/resources/dashboard.yml bundle/resources/jobs.yml bundle/resources/lakebase.yml bundle/resources/ops.yml bundle/resources/schema.yml bundle/resources/secrets.yml bundle/resources/volume.yml bundle/resources/warehouse.yml bundle/resources/watch.yml bundle/scripts/admin.sh bundle/scripts/codes.yaml bundle/scripts/contract.yaml bundle/scripts/health.yaml bundle/scripts/lakebase-setup.sql bundle/scripts/node-sizing.sh bundle/scripts/node-sizing.yaml bundle/scripts/ops.yaml bundle/scripts/preflight.sh bundle/scripts/sz.sh bundle/scripts/verify-release.sh"
+bundle_members: "bundle/app/.gitignore bundle/app/sz-databricks-app bundle/dashboards/sz_status.lvdash.json bundle/databricks.yml bundle/lib/.gitignore bundle/lib/sz-databricks-engine-{release}.jar bundle/lib/sz-databricks-watch-{release}.jar bundle/notebooks/sz_quickstart.sql bundle/resources/alerts.yml bundle/resources/app.yml bundle/resources/dashboard.yml bundle/resources/jobs.yml bundle/resources/lakebase.yml bundle/resources/ops.yml bundle/resources/schema.yml bundle/resources/secrets.yml bundle/resources/volume.yml bundle/resources/warehouse.yml bundle/resources/watch.yml bundle/scripts/admin.sh bundle/scripts/codes.yaml bundle/scripts/contract.yaml bundle/scripts/health.yaml bundle/scripts/lakebase-setup.sql bundle/scripts/node-sizing.sh bundle/scripts/node-sizing.yaml bundle/scripts/ops.yaml bundle/scripts/preflight.sh bundle/scripts/sz.sh bundle/scripts/verify-release.sh"
 bundle_app_jar: "bundle/lib/sz-databricks-engine-{release}.jar"
 # Every file of the engine JAR (bundle_app_jar) under these directories: the contract and the release facts setup trusts.
 jar_dirs: "contract release"
@@ -21,4 +21,4 @@ jar_members: "contract/codes.yaml contract/contract.yaml contract/health.yaml co
 payload_manifest: payload.sha256
 # The CORD data archive holds one directory named as the archive (without .tar.gz): exactly these files at
 # its top, and below them only CSV files, one directory per source system (never the answer key).
-cord_top_files: "README.md load.sql"
+cord_top_files: "README.md load.sh load.sql"

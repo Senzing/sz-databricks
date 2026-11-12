@@ -21,7 +21,7 @@ Have ready:
 
 | | |
 |---|---|
-| The [prerequisites](../README.md#prerequisites) | a workspace admin with MANAGE on the catalog, Databricks CLI 1.23.0 or later with a profile for the workspace, `jq`, `cosign`, `openssl`, a bash or zsh shell |
+| The [prerequisites](../README.md#prerequisites) | a workspace admin with MANAGE on the catalog, Databricks CLI 1.23.0 or later with a profile for the workspace that signs in with OAuth (`databricks auth login`, not a personal access token), `jq`, `cosign`, `openssl`, a bash or zsh shell |
 | The GitHub CLI (optional) | `gh`, logged in (`gh auth status`), to download the release; without it you download the files yourself |
 | A release | its tag, for example `4.4.3-1`, from this repository's [releases](https://github.com/Senzing/sz-databricks/releases) |
 | A directory | an absolute path to a new empty directory for the release files, for example `/home/me/sz-databricks-4.4.3-1` |
@@ -113,9 +113,13 @@ Fill in the placeholders and paste:
 >    like) with the column holding the parent's key. Ask me first, then export a sample of each table
 >    to a CSV file on this machine (never paste rows into the chat) through the Statement Execution
 >    API on a SQL warehouse I name from `databricks warehouses list`. Run ONE Senzing MCP
->    `mapping_workflow` over those files together (never hand-write the mapping): its profiler and
->    mapper run here, and the server receives the column names and the mapping, never the rows. Write
->    the view `<catalog>.<schema>.<code>_mapped` as the use page's "Write a mapping view" says, with
+>    `mapping_workflow` over those files together with `environment: "databricks"` (never hand-write
+>    the mapping): its profiler and mapper run here, and the server receives the column names and the
+>    mapping, never the rows. The deliverable is a SQL mapping view, not a JSON file: run its core
+>    steps 1-4 (profile, plan, map, then generate and validate on the sample files, which checks the
+>    mapping) and skip the optional steps 5-8 (a local test load: the install loads and resolves).
+>    One view per kind of record: a parent table with organizations and one with people are two
+>    views and two data sources. Write the view `<catalog>.<schema>.<code>_mapped` as the use page's "Write a mapping view" says, with
 >    exactly `DATA_SOURCE`, `RECORD_ID` (`trim(BOTH ' \t\r\n' FROM <key>)`) and `RECORD_JSON` (child
 >    rows aggregated through a `LEFT JOIN`, one row per key). Show me the view and every
 >    `ALTER TABLE … SET TBLPROPERTIES (delta.enableChangeDataFeed = true, delta.deletedFileRetentionDuration = 'interval 30 days')`
@@ -138,18 +142,25 @@ Fill in the placeholders and paste:
 >    line before it is not `done: dry run of release <release> in catalog <catalog> (target prod); nothing was changed.`,
 >    show me every `problem=<CODE>: …` line with its fix from the troubleshooting page, and stop.
 >    Otherwise show me, from its output:
->    - the billable resources: the jobs `sz-databricks-setup` and `sz-databricks-ingest` (their
+>    - the billable resources: the Databricks App `sz-databricks` (its compute bills while it runs;
+>      it stops itself after 30 minutes without a request), the jobs `sz-databricks-setup` and `sz-databricks-ingest` (their
 >      clusters bill only while a run lasts), the serverless jobs `sz-databricks-watch` (every 5
 >      minutes) and `sz-databricks-ops` (each operation), the SQL warehouse `sz-databricks-warehouse`
 >      (2X-Small, stops after 5 idle minutes) and the Lakebase project `sz-databricks` (4 compute
 >      units, about 8 GB, scales to zero after 30 idle minutes);
 >    - what it creates: the schemas `<catalog>.senzing_internal` and `<catalog>.senzing`, the Volume
 >      `<catalog>.senzing_internal.files`, the secret scope, the cluster policy, the dashboard, the
->      alert, the notebook and the service principal `sz-databricks-jobs`;
->    - every grant it prints (the "What the install grants" section of the install page lists them).
+>      alert, the notebook, the service principal `sz-databricks-jobs` and the group `sz-databricks-app`;
+>    - every grant it prints (the "What the install grants" section of the install page lists them);
+>    - every `GRANT` statement step P10 prints for the sources, all sources together: they let the
+>      jobs' principal read every column of those views and tables, personal data included. A grant
+>      that already exists changes nothing.
 >
 >    Ask me to approve the resources, their cost and these grants. My approval covers exactly these;
->    nothing else.
+>    nothing else. Once I approve, run the source `GRANT` statements before step 7, one at a time on
+>    a SQL warehouse I name from `databricks warehouses list`:
+>    `databricks api post /api/2.0/sql/statements --json "$(jq -n --arg s '<statement>' --arg w <warehouse id> '{statement: $s, warehouse_id: $w, wait_timeout: "50s"}')" | jq -r .status.state`
+>    prints `SUCCEEDED` for each.
 > 7. **Install.** Run the same command without `--dry-run` in the background:
 >
 >    ```sh
@@ -165,10 +176,13 @@ Fill in the placeholders and paste:
 >
 >    Run it again until a line `EXIT <code>` appears. Setup (step P9) takes 5 to 15 minutes; resolving
 >    the sources (P10) depends on their size. Success is the `done: sz-databricks <release> installed …`
->    line, then `EXIT 0`. Otherwise show me `tail -n 40 <dir>/install.log` and the fix from the
->    troubleshooting page. When a registration stops with `SOURCE_NO_ACCESS` or `SOURCE_CDF_OFF` (the
->    jobs' principal is new, so it cannot yet read my tables), show me the statements it printed with
->    the names filled in, say what they mean (the jobs' principal can then read every column of those
+>    line, then `EXIT 0`. A `resolve wait: still resolving (…)` line before it is not a failure: the
+>    records are still loading in the background; tell me and follow them with `sz.sh status` in
+>    step 9. Otherwise show me `tail -n 40 <dir>/install.log` and the fix from the
+>    troubleshooting page. When a registration is refused with `SOURCE_NO_ACCESS` or `SOURCE_CDF_OFF`
+>    (the jobs' principal cannot yet read my tables), the install still tries every other source,
+>    then stops with `<n> source(s) could not be registered` and every statement they need, all
+>    sources together. Show me those statements, say what they mean (the jobs' principal can then read every column of those
 >    tables, personal data included), run them after I approve (an `ALTER TABLE` needs the table
 >    owner) and run the same install command again: every step skips what exists.
 > 8. **Restricted network only.** The first run stops at setup, naming a missing archive. Download
@@ -206,38 +220,23 @@ reshaped into normalized source tables for six source systems. Add this to Promp
 >    (`--pattern 'sz-databricks-cord-data.tar.gz'`) and verify it exactly like the other files
 >    (step 3). Stop if a check fails. Extract it in `<dir>` (`tar -xzf`) and show me its `README.md`
 >    and `load.sql` in a few lines.
-> 2. `load.sql` uses the catalog `sz_cord_data`, which must exist: check with
->    `databricks catalogs get sz_cord_data`. If it does not exist, ask me whether to create it or to
->    use another catalog (then replace `sz_cord_data` throughout the file).
-> 3. Ask me for a SQL warehouse from `databricks warehouses list`. Write `<dir>/sql.sh`, which runs
->    one statement through the Statement Execution API and prints its rows:
->
->    ```sh
->    export DATABRICKS_CONFIG_PROFILE=<profile>
->    WAREHOUSE_ID=<warehouse id>
->    sql() {
->      local body r id st
->      body="$(jq -n --arg s "$1" --arg w "$WAREHOUSE_ID" '{statement: $s, warehouse_id: $w, wait_timeout: "50s", on_wait_timeout: "CONTINUE"}')"
->      r="$(databricks api post /api/2.0/sql/statements --json "$body")"; id="$(jq -r .statement_id <<<"$r")"
->      while st="$(jq -r .status.state <<<"$r")"; [ "$st" = PENDING ] || [ "$st" = RUNNING ]; do
->        sleep 3; r="$(databricks api get "/api/2.0/sql/statements/$id")"
->      done
->      [ "$st" = SUCCEEDED ] || { jq -r '.status.error.message // .status' <<<"$r" >&2; return 1; }
->      jq -c '.result.data_array[]?' <<<"$r"
->    }
->    ```
->
->    Each statement in `load.sql` ends with `;` at the end of a line. After I approve, run part 1
->    one statement at a time with `source <dir>/sql.sh && sql "<statement>"`, upload each source
->    directory as the install page's CORD section shows, then run part 2. Its last statements compare
->    every table's loaded and expected row counts: they must be equal.
-> 4. Map each of the six source systems as "Map a source" says (its tables are already in Databricks
->    with Change Data Feed on): one mapping view per source system in its schema, showing me each view
->    before you create it. Then pass one `--source` per source system to the install script, listing
->    every table its view reads that holds the record id.
->    When a view only looks up a table that holds no record id (a contacts view reading each
->    contact's account from `crm.accounts`), add one `--source-via` for that table as the install
->    page's "Sources at install" shows.
+> 2. Load it into `<catalog>`, the catalog you install into (unless I name another; it must exist).
+>    Ask me for a SQL warehouse from `databricks warehouses list`. Show me
+>    `<dir>/sz-databricks-cord-data/load.sh <catalog> <warehouse id> --profile <profile> --dry-run`
+>    in a few lines; after I approve, run it without `--dry-run`, as one command on its own with
+>    `; echo "EXIT $?"` added. It runs `load.sql` with `<catalog>` in place of the catalog the file
+>    names, uploads the CSVs and prints every table's loaded and expected rows: 26 tables in six
+>    source systems. If the last line is not `EXIT 0`, show me the output and stop.
+> 3. Map the tables as "Map a source" says (they are already in Databricks with Change Data Feed
+>    on): one mapping view per kind of record, in its source system's schema, showing me each view
+>    before you create it. A source system can hold more than one: `crm` holds organizations
+>    (`accounts`) and people (`contacts`), so it maps to two views and two data sources, such as
+>    `CRM_ACCOUNTS` and `CRM_CONTACTS`.
+> 4. Pass one `--source` per mapping view to the install script, listing every table its view reads
+>    that holds the record id. When a view only looks up a table that holds no record id (the
+>    contacts view reading each contact's account from `crm.accounts`), add one `--source-via` for
+>    that table as the install page's "Sources at install" shows:
+>    `--source-via CRM_CONTACTS=<catalog>.crm.accounts.account_id:<catalog>.crm.contacts.account_id.contact_id`.
 
 ## Prompt 2: a report on your data
 
