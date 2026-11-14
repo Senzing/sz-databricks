@@ -8,6 +8,37 @@ Versions here are the releases of sz-databricks, `<senzing_version>-<build>` (fo
 `4.4.3-1`): the Senzing version the release carries and a build counter that restarts at 1 for
 each Senzing version.
 
+## [Unreleased]
+
+### Changed
+
+- `sz.sh register --sources JSON` (a JSON array of each source's register parameters) registers
+  several sources in one operations run (`op=register` `sources=`); each is registered on its own and
+  the result's `sources` lists each one's outcome. Install P10 registers every `--source` in one run
+  instead of one run per source.
+- The CORD load creates its tables with `delta.enableChangeDataFeed` and
+  `delta.deletedFileRetentionDuration` (30 days) from `package.table_properties` in
+  `testdata/cord/schema.yaml`, so registering a CORD source no longer warns about file retention.
+- The AI-assisted guide waits for `resolve_state` `CAUGHT_UP` (`sz.sh wait` in the background) before
+  Prompt 2, so the report covers every loaded record.
+
+### Fixed
+
+- The install no longer stops at P3 `SERVERLESS_ONLY` "cannot read this workspace's compute" when the
+  Databricks CLI prints a one-time hint on stderr (CLI 1.24, under an AI agent: `databricks aitools install`):
+  the preflight parses a successful command's stdout only and passes its stderr on.
+- `sz.sh` waits after starting a stopped App until `databricks apps get` reads RUNNING
+  (`app_start_wait_secs`, 600), and retries a request the Apps proxy answers 502 or 503 with its own
+  page every `poll_interval_secs` for at most `app_unavailable_wait_secs` (300), then `APP_NOT_RUNNING`;
+  the App's own JSON errors are never retried. An uninstall no longer fails on a stopped App.
+- The watcher's `watch_pending` (and its state file's `status.pending`) is counted after it adopts the
+  ingest drain position, every run and while an ingest run is still active, so `sz_health` no longer
+  reports sources pending that a run already read; it logs the baselines it raised and the tables still
+  pending.
+- The watcher's first scheduled run after the bundle deploy no longer fails before setup has created
+  `sz_app_state` and `sz_sources`: with neither present it logs that setup has not finished and succeeds
+  without writing; with only one present it fails.
+
 ## [4.4.3-5] - 2026-11-12
 
 ### Added
