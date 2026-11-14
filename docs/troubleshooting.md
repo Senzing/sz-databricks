@@ -130,7 +130,7 @@ only come from a script.
 | `NOT_MANAGER` | the call changes the installation and you do not hold CAN MANAGE on the App | an App manager grants you CAN MANAGE on the App (`databricks apps set-permissions`), or runs the command |
 | `WORKSPACE_CALL` | the App's call to the workspace (jobs, secrets, warehouse, files) failed | the message names the call and its HTTP status; check the App's service principal still has its bound resources, then retry |
 | `RUN_NOT_FOUND` | the run is not a run of this installation's jobs, or no longer exists | pass a run id that `sz.sh` printed for this installation |
-| `APP_NOT_RUNNING` | the App did not reach RUNNING | `databricks apps get <app>`; `databricks apps start <app>`, then retry (the App stops itself after its idle period) |
+| `APP_NOT_RUNNING` | the App did not reach RUNNING within 10 minutes of `sz.sh` starting it, or the Apps proxy still answered HTTP 502 or 503 (the App not serving) after 5 minutes of retries | `databricks apps get <app>`: its `app_status` and `compute_status`, and the App's logs; `databricks apps start <app>`, then retry (the App stops itself after its idle period) |
 
 ## Reading the Lakebase waits
 

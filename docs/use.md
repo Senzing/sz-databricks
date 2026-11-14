@@ -18,6 +18,7 @@ internal schema. Both are the defaults; use your names if you changed them at in
 | `status` | the `sz_health` row and each code's fix; exit 0 only when `overall` is `OK` |
 | `wait [--timeout S]` | reads `sz_health` every 15 seconds until `resolve_state` reads `CAUGHT_UP` |
 | `register CODE …` | registers a source: a mapping view and its tables, or a Volume folder ([below](#register-a-source)) |
+| `register --sources JSON` | registers several sources in one operations run ([below](#several-sources-in-one-run)) |
 | `unregister CODE`, `enable CODE`, `disable CODE` | removes a source's registration (its records stay), or turns its loading on or off |
 | `purge-source CODE --confirm CODE` | deletes a disabled source's records from Senzing and the mart, then its registration |
 | `reload CODE --confirm CODE` | reads the source again from the start |
@@ -39,7 +40,10 @@ internal schema. Both are the defaults; use your names if you changed them at in
 `sz.sh` asks the install's Databricks App, `sz-databricks`, which runs as its own service principal
 and serves a JSON API (it has no pages). It signs in with your Databricks CLI login (`databricks auth
 token`), starts the App when it is stopped (the App stops its own compute after 30 minutes without a
-request; the install's `app_idle_minutes`, 0 keeps it running), sends the operation and follows the
+request; the install's `app_idle_minutes`, 0 keeps it running) and waits until `databricks apps get`
+reads it RUNNING (at most 10 minutes, then `APP_NOT_RUNNING`). A request the Apps proxy answers with
+HTTP 502 or 503 before the App serves (its own page, not the App's JSON) is retried every 10 seconds
+for at most 5 minutes, then `APP_NOT_RUNNING`. It then sends the operation and follows the
 run the App starts. Each operation runs as a job of the install (the operations job
 `sz-databricks-ops` or the setup job) or reads `sz_health`. An operations job run takes 4 to 8
 minutes, most of it waiting for its serverless compute to start, and runs one at a time: a second
@@ -214,6 +218,21 @@ is active loads in the next run. There is no limit on how many tables are watche
 A base table with no Delta version in Unity Catalog (a streaming table or materialized view) is
 refused: register the Delta table it reads.
 
+### Several sources in one run
+
+```sh
+sz.sh register --sources '[{"code":"CUSTOMERS","view":"<catalog>.<schema>.customer_mapped","tables":"<catalog>.<schema>.customer=customer_id","key":"customer_id"},
+                           {"code":"PPP_LOANS","path":"/Volumes/<catalog>/<schema>/<volume>/<folder>"}]'
+```
+
+One operations run registers every source of the JSON array, as the install script's `--source`
+does. Each object holds one source's options under `code`, `view`, `tables` (`T[=COL],…`), `key`,
+`via` (`L.KEY:T.VKEY.RID,…`), `path`, `format` and `on_remove`. Each source is checked and
+registered on its own: the result's `sources` lists each one's `status`, `code`, `message`,
+`details`, `warnings` and `statements`; `details.registered` names those registered and their first
+load starts. The exit status is 1 when any source was refused, and the top-level `code` is the
+first refusal's (`SOURCE_EXISTS` for one already registered).
+
 ### Tables shared across sources
 
 Name with `--table` every table whose change should re-resolve the source's records. A table the
@@ -341,7 +360,7 @@ the rest, and `warnings` both. Each code's meaning and fix is in
 | `entity_count`, `source_count`, `sources_enabled`, `sources_failed`, `source_errors` | the mart and the sources |
 | `last_run_id`, `last_run_state`, `last_run_ended_at`, `last_run_error`, `loop_running`, `affected_pending`, `paused` | ingest |
 | `rejected_keys`, `mart_quarantine`, `files_held`, `purges_running`, `purges_failed`, `purges` | work that needs a look |
-| `watch_error`, `watch_pending`, `checked_at` | the watcher's last error, the runs it has pending, and when the row was read |
+| `watch_error`, `watch_pending`, `checked_at` | the watcher's last error, how many sources have changes no run has read yet, and when the row was read |
 
 ### The dashboard
 

@@ -75,7 +75,7 @@ It runs these steps, each printed as `==> P<n> …` before it runs:
 | P7 secrets | generates the engine's Lakebase password and stores it and the license in the secret scope (on stdin, never printed) |
 | P8 grants | `scripts/admin.sh post` and `app`, and `operator` and `consumer` for the groups you named |
 | P9 EULA and setup | runs the setup job: it stages the engine payload into the Volume (the first run downloads about 600 MB), creates the `senzing` database and the `sz_engine` role in Lakebase, the Senzing schema and default configuration, the install's tables, the entity mart and `sz_health`, and records your EULA acceptance. A re-run skips it when `sz_health` shows setup succeeded for this release, unless you pass `--license-file` or `--force-setup` or P7 generated a new engine password. On a re-install over kept data it then resumes ingest, which the uninstall paused |
-| P10 sources | `sz.sh register` for each `--source` (a dry run prints the `GRANT` statements every source needs, all sources together; a registration refused for access or change data feed lets the others run, then the install stops with every statement they need), then `sz.sh wait` until `sz_health.resolve_state` reads `CAUGHT_UP`, for at most `--resolve-wait` seconds (default 1800). A wait that ends while the install is healthy and its records still rise is not a failure: it prints `still resolving … check with sz.sh status` and the install goes on to P11 |
+| P10 sources | `sz.sh register --sources`: every `--source` in one operations run (a dry run prints the `GRANT` statements every source needs, all sources together; a source refused for access or change data feed lets the others register, then the install stops with every statement they need), then `sz.sh wait` until `sz_health.resolve_state` reads `CAUGHT_UP`, for at most `--resolve-wait` seconds (default 1800). A wait that ends while the install is healthy and its records still rise is not a failure: it prints `still resolving … check with sz.sh status` and the install goes on to P11 |
 | P11 health | `sz.sh status`: `sz_health.overall` must read `OK` |
 
 Every step is idempotent: run the same command again after fixing a failure and it skips what
@@ -117,11 +117,12 @@ own (a child table's foreign key). For example:
 --source CUSTOMERS=main.crm.customer_mapped:main.crm.customer=customer_id,main.crm.customer_phone=customer_id
 ```
 
-After setup the script registers each with `sz.sh register` and waits until it is resolved, so one
-run ends with results. Prepare each source first ([use](use.md#prepare-a-source)): Change Data Feed
-on and a mapping view. On a new install the jobs' service principal does not exist before P4, so
-the registration of a source it cannot read stops with `SOURCE_NO_ACCESS` and the GRANT statements
-to run: run them, then run the same command again; it keeps the sources an earlier run
+After setup the script registers them all in one operations run (`sz.sh register --sources`,
+[use](use.md#several-sources-in-one-run)) and waits until they are resolved, so one run ends with
+results. Prepare each source first ([use](use.md#prepare-a-source)): Change Data Feed on and a
+mapping view. On a new install the jobs' service principal does not exist before P4, so a source it
+cannot read is refused with `SOURCE_NO_ACCESS` and the GRANT statements to run (the others
+register): run them, then run the same command again; it keeps the sources an earlier run
 registered (to change one, `sz.sh unregister` it first). A folder of files is registered after the
 install with `sz.sh register <CODE> --path …` ([use](use.md#a-files-source)).
 
@@ -230,7 +231,8 @@ cat README.md   # what it holds: 26 tables in six source systems
 sz-databricks into. It runs `load.sql` one statement at a time through the Statement Execution API
 on a SQL warehouse you can use (`databricks warehouses list`), with your catalog in place of the
 `sz_cord_data` the file names. Part 1 creates the schema `cord_stage` with the Volume `files`, then
-one schema per source system with its tables, every table with Change Data Feed on. The script then
+one schema per source system with its tables, every table with Change Data Feed on and 30 days of
+deleted files kept (the retention registration recommends). The script then
 uploads each source directory to the Volume and runs part 2: `COPY INTO` loads every table. Last it
 prints every table's loaded and expected row counts and exits 0 only when they are equal. It needs
 `jq`; `--dry-run` prints every statement and upload and runs nothing.

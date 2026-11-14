@@ -192,6 +192,11 @@ Fill in the placeholders and paste:
 > 9. **Check it.** Run `<dir>/bundle/scripts/sz.sh status`: it must print `"overall": "OK"`. If it
 >    lists codes, show me each with its `fix`. Show me the counts:
 >    `<dir>/bundle/scripts/sz.sh status | jq '{resolve_state, entity_count, source_count}'`.
+>    Until `resolve_state` reads `CAUGHT_UP` the records are still resolving and the results are
+>    partial. Run
+>    `nohup sh -c '<dir>/bundle/scripts/sz.sh wait --timeout 7200; echo "EXIT $?"' > <dir>/wait.log 2>&1 &`,
+>    follow `<dir>/wait.log` as the rules say until a line `EXIT <code>` appears, then show me the
+>    counts again.
 >    Tell me in one line each: the install is done; the jobs' clusters bill only during a run and the
 >    watcher starts one when my tables change; `sz.sh` operates it (the use page); `sz.sh uninstall`
 >    removes it.
@@ -240,7 +245,8 @@ reshaped into normalized source tables for six source systems. Add this to Promp
 
 ## Prompt 2: a report on your data
 
-When `sz.sh status` reads `"overall": "OK"`, paste:
+When `sz.sh status` reads `"overall": "OK"` and `"resolve_state": "CAUGHT_UP"` (before that the
+records are still resolving and the report shows only part of them), paste:
 
 > Build a Streamlit app that runs locally on this machine and reports on my source data joined with
 > the Senzing results. This is a report on the data, not on the install. Use a Python 3.12 virtual
